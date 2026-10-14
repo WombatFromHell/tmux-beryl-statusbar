@@ -8,7 +8,7 @@
 load test_helper
 
 setup() {
-  start_scratch_server
+  start_server
   load_conf
 }
 teardown() { stop_scratch_server; }

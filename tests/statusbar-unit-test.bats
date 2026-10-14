@@ -10,6 +10,10 @@ load test_helper
 setup() {
   DIR="$BATS_TEST_DIRNAME"
   LIB="$DIR/../scripts/statusbar-lib.bash"
+  # The conf owns the palette (@c_* in 04-statusbar.conf) and statusbar.sh
+  # reads it from tmux; the unit tier has no server, so it pins the shipped
+  # colours as a fixture.
+  _sb_s0='#313244' _sb_o2='#a6adc8' _sb_t1='#cdd6f4' _sb_m='#6c7086'
 }
 
 teardown() {
@@ -143,26 +147,11 @@ exit 1'
   [[ $(_sb_clock_fmt garbage) == "%H:%M" ]]
 }
 
-@test "compose: bare clock pre-data (no metrics)" {
-  source "$LIB"
-  gpu='' vram='' cpu='' ram='' batt='' batt_icon='' date_str='' clock=07:19
-  out=$(compose_metrics)$(_sb_time)
-  [[ $out == "#[fg=#6c7086]07:19 #[default]" ]]
-}
-
 @test "compose: decorated calendar+clock ready (exact)" {
   source "$LIB"
   gpu='' vram='' cpu='' ram='' batt='' batt_icon='' date_str=07.06 clock=07:19
-  out=$(compose_metrics)$(_sb_time 1)
+  out=$(compose_metrics)$(_sb_time 1 "$date_str" "$clock")
   [[ $out == "#[bg=#313244] #[fg=#cdd6f4]$(_icon cal)#[fg=#a6adc8] 07.06 #[fg=#6c7086]|#[default]#[bg=#313244] #[fg=#cdd6f4]$(_icon clock) #[fg=#a6adc8]07:19 #[default]" ]]
-}
-
-@test "compose: time block present even with all metrics hidden" {
-  source "$LIB"
-  gpu='' vram='' cpu='' ram='' batt='' batt_icon='' date_str=07.06 clock=07:19
-  out=$(compose_metrics)$(_sb_time 1)
-  [[ $out == *"07.06"* ]]
-  [[ $out == *"07:19"* ]]
 }
 
 @test "cpu_delta: computes percent from totals" {
@@ -296,7 +285,7 @@ EOF
   local out g c
   g="$(_icon gpu)"
   c="$(_icon cpu)"
-  out="$(compose_metrics)$(_sb_time)"
+  out="$(compose_metrics)$(_sb_time 0 "$date_str" "$clock")"
   # GPU block (bg + icon + util + vram)
   [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]${g}#[fg=#a6adc8] 42%"* ]]
   [[ $out == *"#[fg=#6c7086]|#[fg=#a6adc8]67%"* ]]
@@ -311,103 +300,8 @@ EOF
   [[ $out != *"#[default]  "* ]]
 }
 
-@test "compose: no GPU — GPU block empty, CPU/RAM render" {
-  source "$LIB"
-  gpu=
-  vram=
-  cpu=15
-  ram=80
-  batt=
-  batt_icon=
-  local out g c
-  g="$(_icon gpu)"
-  c="$(_icon cpu)"
-  out="$(compose_metrics)$(_sb_time)"
-  [[ $out != *"$g"* ]]
-  [[ $out != *"42%"* ]]
-  [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]${c}#[fg=#a6adc8] 15%"* ]]
-  [[ $out == *"#[fg=#6c7086]|#[fg=#a6adc8]80%"* ]]
-}
-
-@test "compose: zero values render (0% is not hidden)" {
-  source "$LIB"
-  gpu=0
-  vram=0
-  cpu=0
-  ram=0
-  batt=0
-  batt_icon="󰂎"
-  local out
-  out="$(compose_metrics)$(_sb_time)"
-  local count
-  count="$(grep -o '0%' <<<"$out" | wc -l)"
-  [[ $count == "5" ]]
-}
-
 # date_str/clock are consumed by the lib's _sb_time (cross-file globals).
 # shellcheck disable=SC2034
-@test "compose: all hidden — only time block" {
-  source "$LIB"
-  gpu=
-  vram=
-  cpu=
-  ram=
-  batt=
-  batt_icon=
-  date_str=07.06
-  clock=07:19
-  local out
-  out="$(compose_metrics)$(_sb_time)"
-  [[ $out == "#[fg=#6c7086]07:19 #[default]" ]]
-}
-
-@test "compose: GPU hidden leaves no leading space" {
-  source "$LIB"
-  gpu=
-  vram=
-  cpu=15
-  ram=80
-  batt=
-  batt_icon=
-  local out
-  out="$(compose_metrics)$(_sb_time)"
-  # CPU block starts immediately with #[bg=...] (no leading space)
-  [[ $out == "#[bg"*** ]]
-  [[ $out != " "* ]]
-}
-
-@test "compose: hidden battery leaves single gap after CPU" {
-  source "$LIB"
-  gpu=
-  vram=
-  cpu=15
-  ram=80
-  batt=
-  batt_icon=
-  local out
-  out="$(compose_metrics)$(_sb_time)"
-  local plain
-  plain="$(sed "s/#\[[^]]*\]//g" <<<"$out")"
-  # RAM half is last visible: ends with 80% + 3 spaces
-  [[ $plain == *"80% "* ]]
-}
-
-@test "compose: visible battery keeps single spacing between all blocks" {
-  source "$LIB"
-  gpu=42
-  vram=67
-  cpu=15
-  ram=80
-  batt=97
-  batt_icon="󰂄"
-  local out
-  out="$(compose_metrics)$(_sb_time)"
-  local plain
-  plain="$(sed "s/#\[[^]]*\]//g" <<<"$out")"
-  [[ $plain == *"42%|67% "* ]]
-  [[ $plain == *"15%|80% "* ]]
-  [[ $plain == *"󰂄 97% "* ]]
-}
 
 # --- Battery unit tests -----------------------------------------------------
 
@@ -498,4 +392,54 @@ EOF
   run ! _batt_is_ac Discharging
   run ! _batt_is_ac Unknown
   run ! _batt_is_ac ""
+}
+
+# --- compose table -----------------------------------------------------------
+# One row per fixture, comma-separated: label, gpu, vram, cpu, ram, batt,
+# batt_icon, date_str, clock, ready, then the assertions as `kind:argument`
+# terms split by ';'. kinds: exact (whole output), has/not (substring),
+# plain (substring of the style-stripped output), noicon (that _icon glyph
+# absent), starts (output starts with the argument). `not:  #[` is the
+# spacing invariant — no two spaces before any style marker, so hidden blocks
+# emit zero characters and visible ones keep single gaps.
+@test "compose: table — hidden blocks emit zero chars, visible ones stay flush" {
+  source "$LIB"
+  local label gpu vram cpu ram batt batt_icon date_str clock ready checks out plain term kind arg glyph fails=0 ok
+  while IFS=',' read -r label gpu vram cpu ram batt batt_icon date_str clock ready checks; do
+    [[ -z $label ]] && continue
+    out="$(compose_metrics)$(_sb_time "$ready" "$date_str" "$clock")"
+    plain="$(sed "s/#\[[^]]*\]//g" <<<"$out")"
+    local -a terms
+    IFS=';' read -ra terms <<<"$checks"
+    for term in "${terms[@]}"; do
+      kind=${term%%:*} arg=${term#*:}
+      local ok=1
+      case $kind in
+      exact) [[ $out == "$arg" ]] || ok=0 ;;
+      has) [[ $out == *"$arg"* ]] || ok=0 ;;
+      not) [[ $out != *"$arg"* ]] || ok=0 ;;
+      plain) [[ $plain == *"$arg"* ]] || ok=0 ;;
+      noicon)
+        glyph="$(_icon "$arg")"
+        [[ $out != *"$glyph"* ]] || ok=0
+        ;;
+      starts) [[ $out == "$arg"* ]] || ok=0 ;;
+      *)
+        printf 'unknown kind %s\n' "$kind" >&2
+        ok=0
+        ;;
+      esac
+      [[ $ok -eq 1 ]] || {
+        printf 'row %s: %s\n' "$label" "$term" >&2
+        fails=$((fails + 1))
+      }
+    done
+  done <<'EOF'
+pre-data-hidden,,,,,,,07.06,07:19,0,exact:#[fg=#6c7086]07:19 #[default]
+ready-hidden-metrics-off,,,,,,,07.06,07:19,1,has:07.06;has:07:19;not:0%
+gpu-hidden-cpu-visible,,,15,80,,,,07:19,0,starts:#[bg=#313244];noicon:gpu;not:42%;plain:15%|80%;not:  #[
+zero-values-render,0,0,0,0,0,󰂎,,07:19,0,plain:0%|0%;plain:󰂎 0%;not:  #[
+battery-visible-spacing,42,67,15,80,97,󰂄,,07:19,0,plain:42%|67%;plain:15%|80%;plain:97%;not:  #[
+EOF
+  [[ $fails -eq 0 ]]
 }

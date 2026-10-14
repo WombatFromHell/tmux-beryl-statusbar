@@ -12,12 +12,12 @@
 #   INTERVAL_MS   poll cadence in ms (default 1000 = 1 s)
 #   LOCKED_PROCS  regex alternation of procs that trigger the lock
 set -uo pipefail
-export PATH="${PATH:+$PATH:}/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 INTERVAL_MS=${AUTOLOCK_INTERVAL_MS:-1000}
 LOCKED_PROCS=${AUTOLOCK_PROCS:-'ssh|fzf'}
 
 # shellcheck disable=SC1091
+source "${BASH_SOURCE[0]%/*}/_env.bash"
 source "${BASH_SOURCE[0]%/*}/autolock-lib.bash"
 
 # --- tmux state accessors --------------------------------------------------
@@ -82,7 +82,7 @@ poll() {
 }
 
 _poll_locked() {
-  local fg locked override action auto_desired
+  local fg locked override action
   fg=$(_foreground)
   locked=$(_is_locked && printf 1 || printf 0)
   override=$(_override)
@@ -91,17 +91,10 @@ _poll_locked() {
   lock) lock ;;
   unlock) unlock ;;
   esac
-  # Clear the override once the auto-desired state matches it (auto and
-  # manual agree), so a fresh matched proc re-asserts the auto behavior.
-  if [[ -n $override ]]; then
-    if matches_locked "$LOCKED_PROCS" "$fg"; then
-      auto_desired=lock
-    else
-      auto_desired=unlock
-    fi
-    if [[ $auto_desired == "$override" ]]; then
-      _clear_override
-    fi
+  # Clear the override once the auto state agrees with it (auto and manual
+  # agree), so a fresh matched proc re-asserts the auto behavior.
+  if [[ -n $override ]] && [[ $(auto_desired "$LOCKED_PROCS" "$fg") == "$override" ]]; then
+    _clear_override
   fi
 }
 
@@ -121,15 +114,6 @@ _start() {
   done
 }
 
-_stop() {
-  local pidfile="${TMUX_TMPDIR:-/tmp}/tmux-autolock.pid"
-  if [[ -f $pidfile ]]; then
-    kill "$(cat "$pidfile")" 2>/dev/null
-    rm -f "$pidfile"
-  fi
-  return 0
-}
-
 toggle() { # manual override (F12): flip the lock state + arm the override
   with_lock _toggle_locked
 }
@@ -147,13 +131,13 @@ _toggle_locked() {
 # --- dispatch ----------------------------------------------------------------
 case ${1:-} in
 start) _start ;;
-stop) _stop ;;
 poll) poll ;;
 lock) lock ;;
 unlock) unlock ;;
+locked) _is_locked ;;
 toggle) toggle ;;
 *)
-  printf 'usage: autolock.sh {start|stop|poll|lock|unlock|toggle}\n' >&2
+  printf 'usage: autolock.sh {start|poll|lock|unlock|toggle|locked}\n' >&2
   exit 2
   ;;
 esac

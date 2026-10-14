@@ -10,16 +10,21 @@
 source "$(dirname "$BATS_TEST_FILENAME")/test_helper.bash"
 
 setup() {
-  start_scratch_server
+  start_server
   mkdir -p "$HOME/.config/tmux/scripts"
-  cp "$BATS_TEST_DIRNAME/../scripts/autolock.sh" "$HOME/.config/tmux/scripts/"
-  cp "$BATS_TEST_DIRNAME/../scripts/autolock-lib.bash" "$HOME/.config/tmux/scripts/"
+  cp "$BATS_TEST_DIRNAME/../scripts/autolock.sh" "$BATS_TEST_DIRNAME/../scripts/autolock-lib.bash" "$BATS_TEST_DIRNAME/../scripts/_env.bash" "$HOME/.config/tmux/scripts/"
   cp "$BATS_TEST_DIRNAME/../scripts/lockchip.sh" "$HOME/.config/tmux/scripts/"
   chmod +x "$HOME/.config/tmux/scripts/autolock.sh" "$HOME/.config/tmux/scripts/lockchip.sh"
 }
 teardown() { stop_scratch_server; }
 
 _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
+
+# pane_cmd_is/pane_cmd_not CMD — the pane's foreground command, which is what
+# autolock's AUTOLOCK_PROCS match against. Polling it replaces the fixed sleeps
+# that used to wait for the pane to start/stop a proc (same assertions, less wall).
+pane_cmd_is() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') == "$1" ]]; }
+pane_cmd_not() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') != "$1" ]]; }
 
 @test "lock() sets prefix/key-table to the locked state" {
   tmux run-shell "$HOME/.config/tmux/scripts/autolock.sh lock"
@@ -47,11 +52,11 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
 
 @test "poll() locks when the foreground is a locked proc, unlocks when it exits" {
   tmux send-keys -t base 'sleep 60' Enter
-  sleep 1
+  wait_until 5 pane_cmd_is sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
   [[ $(tmux show-options -gv prefix) == None ]]
   tmux send-keys -t base C-c
-  sleep 1
+  wait_until 5 pane_cmd_not sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
   [[ $(tmux show-options -gv prefix) != None ]]
 }
@@ -63,7 +68,6 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
   [[ $(_ov) == lock ]]
   # Poll: fg not matched, locked=1, override=lock -> noop (stays locked).
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
-  sleep 0.5
   [[ $(tmux show-options -gv prefix) == None ]]
   [[ $(_ov) == lock ]]
 }
@@ -71,7 +75,7 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
 @test "poll() noops when override=unlock and matched proc (honor disengage)" {
   # Matched proc in foreground. F12 disengage.
   tmux send-keys -t base 'sleep 60' Enter
-  sleep 1
+  wait_until 5 pane_cmd_is sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh toggle"
   [[ $(tmux show-options -gv prefix) == None ]]
   [[ $(_ov) == lock ]]
@@ -81,7 +85,6 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
   [[ $(_ov) == unlock ]]
   # Poll: fg matched, not locked, override=unlock -> noop (stays disengaged).
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
-  sleep 0.5
   [[ $(tmux show-options -gv prefix) != None ]]
   [[ $(_ov) == unlock ]]
 }
@@ -89,12 +92,11 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
 @test "poll() clears override when auto_desired matches override (engage)" {
   # Matched proc in foreground. F12 engage. auto_desired=lock == override=lock -> clear.
   tmux send-keys -t base 'sleep 60' Enter
-  sleep 1
+  wait_until 5 pane_cmd_is sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh toggle"
   [[ $(_ov) == lock ]]
   # Poll: clears the override (auto and manual agree on lock).
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
-  sleep 0.5
   [[ $(_ov) == "" ]]
   # Still locked (auto_desired=lock, no override -> lock, already locked -> noop).
   [[ $(tmux show-options -gv prefix) == None ]]
@@ -108,7 +110,6 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
   [[ $(_ov) == unlock ]]
   # Poll: clears the override (auto and manual agree on unlock).
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
-  sleep 0.5
   [[ $(_ov) == "" ]]
   [[ $(tmux show-options -gv prefix) != None ]]
 }

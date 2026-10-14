@@ -16,7 +16,7 @@ tmux() {
   "$REAL_TMUX" -f /dev/null -S "$SOCK" "$@"
 }
 
-start_scratch_server() {
+start_server() {
   unset TMUX TMUX_PANE
   REAL_TMUX="$(type -P tmux)"
   ensure_tmp
@@ -36,8 +36,6 @@ start_scratch_server() {
 # Server start for the integration/E2E tiers. (The old $T/bin link_tools line
 # is gone: no integration/E2E test puts $T/bin on PATH — only unit-tier
 # call_gpu does, via init_unit_bin in the unit test file.)
-start_server() { start_scratch_server; }
-
 stop_scratch_server() {
   # kill-server can fail (server already gone); never let that skip the rm.
   if [[ -n ${SOCK:-} ]]; then tmux kill-server </dev/null 2>/dev/null || true; fi
@@ -78,6 +76,32 @@ load_conf() {
     tmux source-file "$T/tmux.conf"
 }
 
+# load_real_script — swap the stub statusbar for the real one (plus the lockchip
+# / autolock chain the conf's status-left runs) in the scratch HOME.
+load_real_script() {
+  cp "$BATS_TEST_DIRNAME/../scripts/"{statusbar.sh,statusbar-lib.bash,lockchip.sh,autolock.sh,autolock-lib.bash,_env.bash} \
+    "$HOME/.config/tmux/scripts/"
+  chmod +x "$HOME/.config/tmux/scripts"/*.sh
+}
+
+# stub_bar / real_bar — the two shared preambles: an isolated server carrying
+# the shipped conf, with the stub or the real statusbar. Tests that watch the
+# drawn bar add attach_observer on top.
+stub_bar() {
+  start_server
+  load_conf
+}
+
+# real_bar — the shipped conf plus the real statusbar chain. The redraw tick is
+# cut to 1s so the convergence waits poll a short cycle instead of waiting out
+# the shipped 3s (02-core.conf); the pacing test sets its own interval on top,
+# so no test asserts a cadence the shipped config does not already own.
+real_bar() {
+  stub_bar
+  load_real_script
+  tmux set -g status-interval 1
+}
+
 # make_mock NAME CONTENT -> executable in $T/mock, without overwriting other mocks.
 make_mock() {
   ensure_tmp
@@ -88,12 +112,10 @@ make_mock() {
 }
 
 # link_tools DIR tool... — symlink the real tools that exist; silently skip the
-# rest (jq/flock/timeout are absent on stock macOS). Tests that need a tool
-# call `needs TOOL`.
+# rest (jq/flock/timeout are absent on stock macOS).
 link_tools() {
   local dir=$1 t p
   shift
   for t in "$@"; do p="$(type -P "$t")" && ln -sf "$p" "$dir/$t"; done
   return 0
 }
-needs() { command -v "$1" >/dev/null || skip "$1 not installed"; }

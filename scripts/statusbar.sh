@@ -11,8 +11,8 @@
 #   * no `#{}`; `#[...]` styles are honored
 #   * the time block is composed here (static: rendered at pull time)
 exec 2>/dev/null
-export PATH="${PATH:+$PATH:}/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 # shellcheck disable=SC1091
+source "${BASH_SOURCE[0]%/*}/_env.bash"
 source "${BASH_SOURCE[0]%/*}/statusbar-lib.bash"
 
 # tmux passes the session whose bar it is drawing and the width of the client
@@ -53,10 +53,14 @@ _sb_read_state() {
   [[ $SB_LAST =~ ^[0-9]+$ ]] || SB_LAST=0
 }
 
-# _sb_clock_format -> print the raw @clock-format value. The single tmux
-# interface for the time block (the library stays tmux-free).
-_sb_clock_format() {
-  tmux show-options -gv @clock-format 2>/dev/null | awk '{print $NF}'
+# _sb_opts -> the one tmux read for everything the conf owns that the bar
+# needs: the clock-format value and the palette the chips paint with (@c_*).
+# The conf is the single owner of both; the library stays tmux-free and takes
+# them as inputs.
+_sb_opts() {
+  IFS='|' read -r clock_fmt _sb_s0 _sb_o2 _sb_t1 _sb_m < <(
+    tmux display -p '#{E:@clock-format}|#{E:@c_s0}|#{E:@c_o2}|#{E:@c_t1}|#{E:@c_m}' 2>/dev/null
+  )
 }
 
 # _sb_out_w TEXT -> publish TEXT as @sb_out (scratch) and echo the CELLS TEXT
@@ -74,24 +78,15 @@ _sb_out_w() {
   echo $((w + ${#1} - ${#plain}))
 }
 
-# _sb_sl_tw OUT -> publish @sl_tw, the active chip's title field for the next
-# draw: the client's width minus everything else the bar draws (04-statusbar.conf
-# sizes that field once, from #{E:@sl_tw} three times, and pads the remainder,
-# so the window list is exactly as wide as the client at any width):
-#   left block (rendered width; `#()` job output is excluded by the primitive
-#   tmux offers — the lockchip's 3 cells are not in it, and need no term of
-#   their own because they land in the same section as the pad, which absorbs
-#   them: probe67 held the row flush, marker-free, locked at 200/120/90/70)
-#   + this job's own output (measured by tmux's own width primitive, styles
-#     stripped — `wc -m` counts characters and drifts on the metric glyphs)
-#   + per window: the " #I " chip (digits + 2), " dot" if that window rang,
-#     and for the active one the " " before the title plus the trailing " "
-#   + 1 @sl_gap_pad between windows (ponytail: one space by conf construction;
-#     a multi-space @sl_gap_pad would drift the budget)
-#   + the two format spaces (before the list, before the right block)
-# The window count is per-server and client_width per-client, so a client wider
-# than the server leaves the pad short; a narrower one drops the title group
-# below 4 columns (T8) and only clips the list chrome once that stops fitting.
+# _sb_sl_tw — publish @sl_tw, the active chip's title field (cells) for the next
+# draw: the client's width minus everything else the bar draws. 04-statusbar.conf
+# sizes that field from #{E:@sl_tw} and pads the remainder, so the window list is
+# as wide as the client that drew last (server-global option, no per-client state
+# -> last draw wins). 0 means "no room for a title": the conf's guard then drops
+# the whole title group. Every input is measured in cells, not hand-counted:
+# left block, this job's own output, per-window chip chrome (" #I ", optional
+# " dot", active-title padding), one @sl_gap_pad between windows, and the two
+# format spaces.
 _sb_sl_tw() {
   local lw rows idx bell act n=0 sum=0 vis field
   [[ $sb_client_w =~ ^[0-9]+$ ]] || return 0 # no client -> keep the shipped field
@@ -105,16 +100,16 @@ _sb_sl_tw() {
   while IFS='|' read -r idx bell act; do
     [[ $idx =~ ^[0-9]+$ ]] || continue
     n=$((n + 1))
-    sum=$((sum + ${#idx} + 2))            # " #I " chip
-    [[ -n $bell ]] && sum=$((sum + 2))    # " dot" on a window that rang
-    [[ $act == 1 ]] && sum=$((sum + 2))   # " " before the title + trailing " "
+    sum=$((sum + ${#idx} + 2))          # " #I " chip
+    [[ -n $bell ]] && sum=$((sum + 2))  # " dot" on a window that rang
+    [[ $act == 1 ]] && sum=$((sum + 2)) # " " before the title + trailing " "
   done <<<"$rows"
   ((n)) || return 0
-  sum=$((sum + n - 1))                  # @sl_gap_pad between windows
+  sum=$((sum + n - 1)) # @sl_gap_pad between windows
   # the job's own output, measured by tmux's own width primitive (see above)
   vis=$(_sb_out_w "$1")
   [[ $vis =~ ^[0-9]+$ ]] || vis=0
-  sum=$((sum + lw + vis + 2))           # blocks + the two format spaces
+  sum=$((sum + lw + vis + 2)) # blocks + the two format spaces
   field=$((sb_client_w - sum))
   # under 4 columns a title is a fragment: publish 0 and the conf's
   # #{?#{@sl_tw},...} guard drops the whole title group, leaving the teal
@@ -124,12 +119,12 @@ _sb_sl_tw() {
   tmux set -g @sl_tw "$field"
 }
 
-# _sb_stamp -> date_str / clock for the time block (cheap, always rendered).
-# date_str/clock are consumed by the lib's _sb_time (cross-file globals).
-# shellcheck disable=SC2034
+# _sb_stamp -> the conf-owned inputs (one read) + the time strings. The lib's
+# _sb_time takes DATE/CLOCK as arguments, so nothing here is a cross-file global.
 _sb_stamp() {
+  _sb_opts
   date_str=$(date +%m.%d)
-  clock=$(date +"$(_sb_clock_fmt "$(_sb_clock_format)")")
+  clock=$(date +"$(_sb_clock_fmt "$clock_fmt")")
 }
 
 # _sb_pull -> the slow part: fills gpu/vram/cpu/ram/batt.
@@ -176,6 +171,6 @@ if ((now - SB_LAST >= $(_sb_interval))); then
   _sb_fetch "$now" </dev/null >/dev/null 9>&- &
 fi
 _sb_stamp
-out=$(printf '%s%s' "$SB_CACHE" "$(_sb_time "$ready")")
+out=$(printf '%s%s' "$SB_CACHE" "$(_sb_time "$ready" "$date_str" "$clock")")
 _sb_sl_tw "$out" # active-chip field for the next draw
 printf '%s' "$out"

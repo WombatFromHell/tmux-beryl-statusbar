@@ -9,12 +9,11 @@
 # The script owns all spacing around the glyph: the status-left format
 # carries no literal space after #(), so when unlocked the session chip is
 # byte-identical to the no-lock state (no visible space).
-export PATH="${PATH:+$PATH:}/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# shellcheck disable=SC1091
+source "${BASH_SOURCE[0]%/*}/_env.bash"
 
-# _is_locked -> success (0) if the leader is currently locked (prefix None).
-_is_locked() {
-  [[ $(tmux show-options -gv prefix 2>/dev/null) == None ]]
-}
+# _is_locked -> ask autolock.sh, the single owner of the lock state.
+_is_locked() { "${BASH_SOURCE[0]%/*}/autolock.sh" locked; }
 
 # _lock_color -> the palette colour for the lock glyph (@c_lock: a dark red
 # that contrasts with the chip's teal bg), with a fallback for environments

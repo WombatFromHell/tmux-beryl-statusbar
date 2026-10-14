@@ -1,11 +1,27 @@
 #!/bin/sh
-# bell.sh — handle a tmux bell notification.
-# Args: win sess active focused attached
+# bell.sh — the single owner of the per-window @bell flag.
+#
+#   bell.sh clear              acknowledge every window in the session
+#   bell.sh ack <win>          acknowledge one window (selection / focus)
+#   bell.sh <win> <sess> <active> <focused> <attached>
+#                            a bell landed: sound it + arm that window's dot
 #
 # One dot per tab per period: @bell is a boolean. A bell sets it to 1;
 # acknowledging (selecting the window, or the terminal regaining focus)
 # clears it. Repeated bells within the same period can't re-arm it because
 # it is already 1.
+case ${1:-} in
+clear)
+  for w in $(tmux list-windows -F '#{window_id}'); do
+    tmux set -uw -w -t "$w" @bell
+  done
+  exit 0
+  ;;
+ack)
+  tmux set -uw -w -t "$2" @bell
+  exit 0
+  ;;
+esac
 win=$1 sess=$2 active=$3 focused=$4 attached=$5
 
 # Already looking at it? Do nothing.

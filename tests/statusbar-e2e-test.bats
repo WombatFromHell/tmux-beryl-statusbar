@@ -20,16 +20,6 @@ teardown() {
 
 # --- helpers -------------------------------------------------------------------
 
-# Copy the real statusbar.sh (not the stub) into the scratch HOME.
-load_real_script() {
-  cp "$DIR/../scripts/statusbar.sh" "$HOME/.config/tmux/scripts/statusbar.sh"
-  cp "$DIR/../scripts/statusbar-lib.bash" "$HOME/.config/tmux/scripts/statusbar-lib.bash"
-  # the conf's status-left runs #(bash …/lockchip.sh); without it the lock
-  # glyph never renders and the locked-leader claim would be vacuous.
-  cp "$DIR/../scripts/lockchip.sh" "$HOME/.config/tmux/scripts/lockchip.sh"
-  chmod +x "$HOME/.config/tmux/scripts"/*.sh
-}
-
 # The stored status-right option is always the raw conf format (job
 # substitution happens per-client at draw time), so the observable is the
 # status line of a real attached client: its job cache renders the script's
@@ -58,9 +48,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 # --- E2E: pull model (#() job) ----------------------------------------------
 
 @test "E2E: attached client renders the composed status-right" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   # The job takes ~1s; wait for its output in the client's status line.
   wait_until 15 row_has_metrics
@@ -72,9 +60,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 }
 
 @test "E2E: reload conf re-fires the status bar job" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   wait_until 15 row_has_metrics
   # Reload the conf — status-right goes back to the raw job format, and the
@@ -84,9 +70,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 }
 
 @test "E2E: data pulls paced at >= status-interval (no back-to-back)" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   # The script claims a pull slot by writing its start timestamp to the
   # pacing state file. It reads status-interval live, so 2s keeps the
@@ -122,9 +106,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
   # the harness's TMUX_TMPDIR=$T isolates the pacing state.
   # Run 1: no state -> bare clock returned at once, detached fetch spawned.
   # Run 2 (after the fetch lands): cached metrics + decorated calendar/clock.
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   # sourced via runtime $DIR; not followable by shellcheck
   # shellcheck disable=SC1091
   source "$DIR/../scripts/statusbar-lib.bash"
@@ -146,9 +128,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 }
 
 @test "E2E: in-flight job returns cache in under 1s (no not-ready text)" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   # A paced-out run must emit the cached line and exit fast: a `#()` job
   # outliving tmux's 1s in-flight window makes tmux render its placeholder
   # `<'cmd' not ready>` in status-right (tmux's own text, not a failure).
@@ -164,9 +144,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 }
 
 @test "E2E: ready-state draw shows the decorated block, clock exactly once" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   # After the second pull (had_prev=1), the decorated block renders:
   # metrics (%), calendar (MM.DD), separator — and a single clock at
@@ -181,9 +159,7 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 }
 
 @test "E2E: floax bell dot renders in the session chip (not blank padding)" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   wait_until 15 row_nonempty
   local row
@@ -236,9 +212,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
 }
 
 @test "E2E: the published budget sizes the window list to the client" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   tmux new-window -d -n tab2 'bash --norc --noprofile'
   tmux new-window -d -n tab3 'bash --norc --noprofile'
   tmux select-window -t base:2
@@ -262,9 +236,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
 # block's term: locking without a term of its own leaves the row short by 3.
 # `set -g prefix None` is exactly what _is_locked tests.
 @test "E2E: a locked leader keeps the budget flush" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   wait_until 15 row_ready
   tmux set -g prefix None # the leader is locked: lockchip.sh's _is_locked test
@@ -272,7 +244,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
   wait_until 15 row_ready
   local row
   row="$(stable_row)"
-  [[ $row != *'<'* && $row != *'>'* ]] # nothing clipped
+  [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
   [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
 }
 
@@ -281,9 +253,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
 # (status-interval is 3s, see 02-core.conf). resize-window -x/-y is the
 # harness's only headless lever on a client's width.
 @test "E2E: a resize keeps the pad flush at every width" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   attach_observer
   wait_until 15 row_ready
   local row
@@ -292,7 +262,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
     tmux refresh-client -S
     wait_until 15 row_ready
     row="$(stable_row)"
-    [[ $row != *'<'* && $row != *'>'* ]] # nothing clipped
+    [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
     [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
   done
 }
@@ -304,9 +274,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
 # indexes must survive; 40 is below that ceiling — the chrome itself no longer
 # fits, which is tmux's own truncation, so the claim there is only "no garbage".
 @test "E2E: a client narrower than the budget drops the active title" {
-  start_server
-  load_conf
-  load_real_script
+  real_bar
   tmux new-window -d -n tab2 'bash --norc --noprofile'
   attach_observer
   wait_until 15 row_ready
@@ -318,9 +286,9 @@ stable_row() { # echo the first row once two consecutive draws are identical
     # wait here is only that the client drew something.
     wait_until 15 row_nonempty
     row="$(stable_row)"
-    [[ $row != *'<'* && $row != *'>'* ]] # nothing clipped
+    [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
     [[ $(row_width) -le $(tmux display -p '#{client_width}') ]] # never overflows
-    [[ $(tmux show-options -gv @sl_tw) -eq 0 ]] # the title group is not drawn
+    [[ $(tmux show-options -gv @sl_tw) -eq 0 ]]                 # the title group is not drawn
     # every window index survives where the chrome still fits without the title
     if ((w == 60)); then
       local i

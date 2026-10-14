@@ -252,11 +252,9 @@ batt_linux() {
 # 6. Compose — build the right-side metric blocks + time block
 # ---------------------------------------------------------------------------
 
-# Palette (mirrors @c_* in 04-statusbar.conf).
-_sb_s0='#313244'
-_sb_o2='#a6adc8'
-_sb_t1='#cdd6f4'
-_sb_m='#6c7086'
+# Palette: caller-set inputs (_sb_s0/_sb_o2/_sb_t1/_sb_m). The conf owns the
+# colours (@c_* in 04-statusbar.conf) and statusbar.sh reads them in one tmux
+# call; the unit tier sets them as a fixture. The library stays tmux-free.
 
 # _sb_clock_fmt VALUE -> print the strftime format for the @clock-format
 # value ('12' -> 12-hour with AM/PM, anything else -> 24-hour). Pure
@@ -284,14 +282,14 @@ _sb_batt() {
   printf '#[bg=%s] #[fg=%s]%s #[fg=%s]%s%% #[default] ' "$_sb_s0" "$_sb_t1" "$batt_icon" "$_sb_o2" "$batt"
 }
 
-# _sb_time READY -> bare muted clock pre-data, calendar+clock once ready.
-# date_str/clock are caller-set globals (set in statusbar.sh _sb_stamp).
-# shellcheck disable=SC2154
+# _sb_time READY DATE CLOCK -> bare muted clock pre-data, calendar+clock once
+# ready. DATE/CLOCK come from the caller (statusbar.sh _sb_stamp); the lib
+# never reads a date itself, so the block stays testable.
 _sb_time() {
   if [[ ${1:-} == 1 ]]; then
-    printf '%s' "#[bg=$_sb_s0] #[fg=$_sb_t1]$(_icon cal)#[fg=$_sb_o2] $date_str #[fg=$_sb_m]|#[default]#[bg=$_sb_s0] #[fg=$_sb_t1]$(_icon clock) #[fg=$_sb_o2]$clock #[default]"
+    printf '%s' "#[bg=$_sb_s0] #[fg=$_sb_t1]$(_icon cal)#[fg=$_sb_o2] $2 #[fg=$_sb_m]|#[default]#[bg=$_sb_s0] #[fg=$_sb_t1]$(_icon clock) #[fg=$_sb_o2]$3 #[default]"
   else
-    printf '%s' "#[fg=$_sb_m]$clock #[default]"
+    printf '%s' "#[fg=$_sb_m]$3 #[default]"
   fi
 }
 

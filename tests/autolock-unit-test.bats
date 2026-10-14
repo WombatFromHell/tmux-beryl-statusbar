@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # autolock-unit-test.bats — unit tier: the pure decision (no tmux).
-# Sources autolock-lib.bash and asserts the decide/matches_locked truth table.
+# Sources autolock-lib.bash and asserts the decide/matches_locked/auto_desired
+# truth tables.
 #
 # Override is a direction: "lock" | "unlock" | "" (empty = no override).
 # It takes priority over the auto-desired state.
@@ -8,6 +9,18 @@
 setup() {
   # shellcheck disable=SC1091
   source "$(dirname "$BATS_TEST_FILENAME")/../scripts/autolock-lib.bash"
+}
+
+# --- Auto state (the single owner of the auto half of the decision) ---
+
+@test "auto_desired: matched proc -> lock" {
+  run auto_desired 'ssh|fzf' ssh
+  [[ $output == lock ]]
+}
+
+@test "auto_desired: unmatched proc -> unlock" {
+  run auto_desired 'ssh|fzf' bash
+  [[ $output == unlock ]]
 }
 
 # --- Auto (no override) ---
