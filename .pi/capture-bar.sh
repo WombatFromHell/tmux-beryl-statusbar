@@ -72,6 +72,10 @@ sweep() { # resize the observer across WIDTHS, one bar row per width
 
   printf '# row — stub statusbar.sh, no live data (byte-stable baseline)\n'
   printf '#!/bin/sh\nexit 0\n' >"$H/.config/tmux/scripts/statusbar.sh"
+  # the stub publishes nothing, so the field would stay at whatever the last
+  # real draw left (0 = no title); pin the shipped fallback to keep the
+  # baseline about the format, not about the previous sweep's client width
+  T set -g @sl_tw 32
   T refresh-client -S
   for _ in $(seq 40); do [[ $(row) != *%* ]] && break || sleep 0.25; done
   sweep

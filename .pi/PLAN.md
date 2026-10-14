@@ -145,13 +145,29 @@ them in a cell), and the same helper measures the left block, so `wc -m` and
 **GREEN change**: expected to be satisfied by T1's clamp + T2's corrected budget. If it still fails, the cause is the *popup's* width vs the budget — name the term, do not add a per-session format (YAGNI: `client_width` is already per-client).
 **Done**: floax suite 8/8 green.
 
-### T8 — a client narrower than the budget clips the tail, not the indexes
+### T8 — a client narrower than the budget drops the active title, not a fragment
 
-**Value**: an absurdly narrow client degrades predictably (tail clipped, no garbage like `berly`, no zero-field full-title blowout).
-**Path**: new e2e test at ~40 cols → `@sl_tw`'s `max:1` clamp → drawn row.
-**RED**: new test asserting the row contains no negative-width artefacts and the active chip's index survives.
-**GREEN change**: the clamp already in T1's `@sl_tw`; this ticket proves it and documents the ceiling.
-**Done**: green at 40 cols; the known-limitation note lands in `conf.d/04-statusbar.conf` (one comment, not a doc file).
+**Value**: at absurd widths the bar stops drawing a 1-char title fragment. The
+active chip becomes the teal `#I` accent only — colour denotes "active", the
+text is gone — indexes survive, no `< >` truncation markers, no garbage tail.
+**Path**: new e2e test at 40 cols → `@sl_tw` publishes **0** when the field is
+under 4 columns → the conf's `#{?#{@sl_tw},…}` guard drops the whole title
+group (styles + text + pad) → drawn row.
+**RED**: new test at 40 cols asserting the published field is 0, the row does
+not overflow the client, no markers, and the inactive index survives. Today the
+clamp publishes 1 and the row shows one title char, so it fails for the right
+reason.
+**GREEN change** (probe69, tmux 3.8): `0` is false in `#{?}` (empty and `0`
+both → NO branch), so `@sl_tw` carries both facts — its width and "no title"
+when the width is under the minimum — and no new option is added. The conf
+wraps the active chip's title group in `#{?#{@sl_tw}, … ,}`; `statusbar.sh`
+publishes 0 instead of clamping at 1, and stops counting the guard's two
+spaces (tmux's `#{=/0/:x}` means "no limit", which is exactly why the guard
+must sit outside the truncation term). Probe: `tw=32` full title, `tw=5`
+`methy…`, `tw=0` title gone with ` 2` intact and the right block still flush
+right.
+**Done**: gate green; the "0 means no title" note lands in `conf.d/04-statusbar.conf`
+(one comment, not a doc file).
 
 ## Out of scope (YAGNI — do not plan these)
 

@@ -90,7 +90,8 @@ _sb_out_w() {
 #     a multi-space @sl_gap_pad would drift the budget)
 #   + the two format spaces (before the list, before the right block)
 # The window count is per-server and client_width per-client, so a client wider
-# than the server leaves the pad short; a narrower one clips the tail (T8).
+# than the server leaves the pad short; a narrower one drops the title group
+# below 4 columns (T8) and only clips the list chrome once that stops fitting.
 _sb_sl_tw() {
   local lw rows idx bell act n=0 sum=0 vis field
   [[ $sb_client_w =~ ^[0-9]+$ ]] || return 0 # no client -> keep the shipped field
@@ -115,7 +116,11 @@ _sb_sl_tw() {
   [[ $vis =~ ^[0-9]+$ ]] || vis=0
   sum=$((sum + lw + vis + 2))           # blocks + the two format spaces
   field=$((sb_client_w - sum))
-  ((field < 1)) && field=1 # tmux: a zero field means "no limit", negative is garbage
+  # under 4 columns a title is a fragment: publish 0 and the conf's
+  # #{?#{@sl_tw},...} guard drops the whole title group, leaving the teal
+  # index chip as the accent. 0 is never tmux's "no limit" here, because the
+  # guard sits outside the truncation term it would disable.
+  ((field < 4)) && field=0
   tmux set -g @sl_tw "$field"
 }
 

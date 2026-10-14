@@ -296,3 +296,37 @@ stable_row() { # echo the first row once two consecutive draws are identical
     [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
   done
 }
+
+# Absurdly narrow client: the field under the chrome leaves no room for a title,
+# so the bar must stop drawing a 1-char fragment and let the teal chip be the
+# accent. 0 is what the conf's #{?#{@sl_tw},...} guard reads as "no title term".
+# 60 is the width where the list chrome still fits without the title, so the
+# indexes must survive; 40 is below that ceiling — the chrome itself no longer
+# fits, which is tmux's own truncation, so the claim there is only "no garbage".
+@test "E2E: a client narrower than the budget drops the active title" {
+  start_server
+  load_conf
+  load_real_script
+  tmux new-window -d -n tab2 'bash --norc --noprofile'
+  attach_observer
+  wait_until 15 row_ready
+  local row w
+  for w in 60 40; do
+    tmux resize-window -t obs -x "$w" -y 20
+    tmux refresh-client -S
+    # row_ready reads the last 40 columns, which a narrow client clips, so the
+    # wait here is only that the client drew something.
+    wait_until 15 row_nonempty
+    row="$(stable_row)"
+    [[ $row != *'<'* && $row != *'>'* ]] # nothing clipped
+    [[ $(row_width) -le $(tmux display -p '#{client_width}') ]] # never overflows
+    [[ $(tmux show-options -gv @sl_tw) -eq 0 ]] # the title group is not drawn
+    # every window index survives where the chrome still fits without the title
+    if ((w == 60)); then
+      local i
+      for i in $(tmux list-windows -t base -F '#{window_index}'); do
+        [[ $row == *" $i "* ]] # index survives
+      done
+    fi
+  done
+}
