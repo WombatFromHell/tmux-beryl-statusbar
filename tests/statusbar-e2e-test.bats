@@ -200,3 +200,51 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
   row="$(obs_row)"
   [[ $row != *'●'* ]]
 }
+
+# --- budget oracle -----------------------------------------------------------
+# statusbar.sh publishes @sl_tw, the active chip's title field for the next
+# draw: the client's width minus everything else the bar draws. 04-statusbar.conf
+# sizes that field once (#{E:@sl_tw} three times) and pads the remainder, so the
+# window list must end where the right block begins. Two ways to be wrong, both
+# observable: over-count clips the list (tmux draws its < > truncation markers),
+# under-count leaves base-colour space there. The pad inside the active chip
+# carries the chip bg (@c_s1), so a flush bar has exactly one base-colour space
+# before the right block: the conf's `#[nolist align=right range=right default] `
+# _sb_sl_tw sizes the window list to the client, so the drawn row must fill the
+# client exactly: an over-count clips (tmux draws its < > truncation markers,
+# asserted below), an under-count leaves the row short of the last column. The
+# right block ends with the clock, so the row has no trailing spaces to strip
+# and its own width is the observable for both directions of the error.
+row_width() { obs_row | wc -m; }
+
+@test "E2E: the published budget sizes the window list to the client" {
+  start_server
+  load_conf
+  load_real_script
+  tmux new-window -d -n tab2 'bash --norc --noprofile'
+  tmux new-window -d -n tab3 'bash --norc --noprofile'
+  tmux select-window -t base:2
+  attach_observer
+  wait_until 15 row_ready
+  # the row and the published field only agree once the budget's fixed point
+  # converges, so wait for two consecutive identical draws: that proves
+  # convergence instead of catching a lucky tick.
+  local prev='' row=''
+  for _tick in {1..20}; do
+    row="$(obs_row)"
+    [[ -n $row && $row == "$prev" ]] && break
+    prev=$row
+    sleep 0.5
+  done
+  [[ -n $row && $row == "$prev" ]] # converged
+  # the field is published and sane (the shipped 32 fallback would also pass,
+  # so the gap and clip checks below carry the sizing claim)
+  local field
+  field=$(tmux show-options -gv @sl_tw | awk '{print $NF}')
+  [[ $field =~ ^[0-9]+$ ]] && ((field > 0))
+  # nothing clipped
+  row="$(obs_row)"
+  [[ $row != *'<'* && $row != *'>'* ]]
+  # the row fills the client: no short tail, and no clip markers above
+  [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+}

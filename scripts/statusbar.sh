@@ -15,6 +15,14 @@ export PATH="${PATH:+$PATH:}/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/
 # shellcheck disable=SC1091
 source "${BASH_SOURCE[0]%/*}/statusbar-lib.bash"
 
+# tmux passes the session whose bar it is drawing and the width of the client
+# looking at it (04-statusbar.conf puts '#{session_name}' and '#{client_width}'
+# in the job text, expanded at draw time); the job's own current session is the
+# client's, a different one when an observer is attached, so window queries
+# must name the drawn session and the width has to come from the expansion.
+sb_session="${1:-}"
+sb_client_w="${2:-}"
+
 # --- pacing: at most one pull per status-interval --------------------------
 # State file: line 1 = last claim (epoch s), line 2 = last composed output.
 _sb_state="${TMUX_TMPDIR:-/tmp}/sb-state"
@@ -49,6 +57,64 @@ _sb_read_state() {
 # interface for the time block (the library stays tmux-free).
 _sb_clock_format() {
   tmux show-options -gv @clock-format 2>/dev/null | awk '{print $NF}'
+}
+
+# _sb_out_w TEXT -> publish TEXT as @sb_out (scratch) and echo the CELLS TEXT
+# occupies on the status line. tmux's own width primitive is the base measure —
+# it strips the #[...] style markers the conf wraps output in, which `wc -m`
+# cannot. It is not the whole story: the private-use nf-icons it measures as
+# zero-width are still drawn in a cell, so each of those is added back (round 3,
+# E4e: the drawn left block was one cell wider than #{w:} reported).
+_sb_out_w() {
+  tmux set -g @sb_out "$1"
+  local w plain
+  w=$(tmux display -p '#{w:#{E:@sb_out}}' 2>/dev/null)
+  [[ $w =~ ^[0-9]+$ ]] || w=0
+  plain=${1//[$'\ue000'-$'\uf8ff']/}
+  echo $((w + ${#1} - ${#plain}))
+}
+
+# _sb_sl_tw OUT -> publish @sl_tw, the active chip's title field for the next
+# draw: the client's width minus everything else the bar draws (04-statusbar.conf
+# sizes that field once, from #{E:@sl_tw} three times, and pads the remainder,
+# so the window list is exactly as wide as the client at any width):
+#   left block (rendered width; `#()` job output is excluded by the primitive
+#   tmux offers, which is why the lockchip's own width is a separate term)
+#   + this job's own output (measured by tmux's own width primitive, styles
+#     stripped — `wc -m` counts characters and drifts on the metric glyphs)
+#   + per window: the " #I " chip (digits + 2), " dot" if that window rang,
+#     and for the active one the " " before the title plus the trailing " "
+#   + 1 @sl_gap_pad between windows (ponytail: one space by conf construction;
+#     a multi-space @sl_gap_pad would drift the budget)
+#   + the two format spaces (before the list, before the right block)
+# The window count is per-server and client_width per-client, so a client wider
+# than the server leaves the pad short; a narrower one clips the tail (T8).
+_sb_sl_tw() {
+  local lw rows idx bell act n=0 sum=0 vis field
+  [[ $sb_client_w =~ ^[0-9]+$ ]] || return 0 # no client -> keep the shipped field
+  # the left block as tmux renders it, in cells (see _sb_out_w)
+  lw=$(_sb_out_w "$(tmux display -t "$sb_session" -p '#{E:status-left}' 2>/dev/null)")
+  [[ $lw =~ ^[0-9]+$ ]] || lw=0
+  # `|` separators: a space-separated read collapses an empty #{@bell} and slides
+  # window_active into bell, which counted 2 phantom columns for every window.
+  rows=$(tmux list-windows -t "$sb_session" -F \
+    '#{window_index}|#{@bell}|#{window_active}' 2>/dev/null)
+  while IFS='|' read -r idx bell act; do
+    [[ $idx =~ ^[0-9]+$ ]] || continue
+    n=$((n + 1))
+    sum=$((sum + ${#idx} + 2))            # " #I " chip
+    [[ -n $bell ]] && sum=$((sum + 2))    # " dot" on a window that rang
+    [[ $act == 1 ]] && sum=$((sum + 2))   # " " before the title + trailing " "
+  done <<<"$rows"
+  ((n)) || return 0
+  sum=$((sum + n - 1))                  # @sl_gap_pad between windows
+  # the job's own output, measured by tmux's own width primitive (see above)
+  vis=$(_sb_out_w "$1")
+  [[ $vis =~ ^[0-9]+$ ]] || vis=0
+  sum=$((sum + lw + vis + 2))           # blocks + the two format spaces
+  field=$((sb_client_w - sum))
+  ((field < 1)) && field=1 # tmux: a zero field means "no limit", negative is garbage
+  tmux set -g @sl_tw "$field"
 }
 
 # _sb_stamp -> date_str / clock for the time block (cheap, always rendered).
@@ -103,4 +169,6 @@ if ((now - SB_LAST >= $(_sb_interval))); then
   _sb_fetch "$now" </dev/null >/dev/null 9>&- &
 fi
 _sb_stamp
-printf '%s%s' "$SB_CACHE" "$(_sb_time "$ready")"
+out=$(printf '%s%s' "$SB_CACHE" "$(_sb_time "$ready")")
+_sb_sl_tw "$out" # active-chip field for the next draw
+printf '%s' "$out"

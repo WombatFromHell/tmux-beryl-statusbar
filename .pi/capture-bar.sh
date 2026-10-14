@@ -56,7 +56,7 @@ sweep() { # resize the observer across WIDTHS, one bar row per width
   for w in $WIDTHS; do
     T resize-window -t obs -x "$w" -y 20
     sleep 3.25 # > status-interval (02-core.conf: 3s), which redraws the status line at the new width
-    printf '## width %s\nfixed_w: %s\n' "$w" "$(T show-options -gv @fixed_w 2>/dev/null)"
+    printf '## width %s\nsl_tw: %s\n' "$w" "$(T show-options -gv @sl_tw 2>/dev/null)"
     row
   done
 }
