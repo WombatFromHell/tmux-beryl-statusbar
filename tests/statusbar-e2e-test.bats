@@ -24,7 +24,10 @@ teardown() {
 load_real_script() {
   cp "$DIR/../scripts/statusbar.sh" "$HOME/.config/tmux/scripts/statusbar.sh"
   cp "$DIR/../scripts/statusbar-lib.bash" "$HOME/.config/tmux/scripts/statusbar-lib.bash"
-  chmod +x "$HOME/.config/tmux/scripts/statusbar.sh"
+  # the conf's status-left runs #(bash …/lockchip.sh); without it the lock
+  # glyph never renders and the locked-leader claim would be vacuous.
+  cp "$DIR/../scripts/lockchip.sh" "$HOME/.config/tmux/scripts/lockchip.sh"
+  chmod +x "$HOME/.config/tmux/scripts"/*.sh
 }
 
 # The stored status-right option is always the raw conf format (job
@@ -217,6 +220,21 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 # and its own width is the observable for both directions of the error.
 row_width() { obs_row | wc -m; }
 
+# The row and the published field only agree once the budget's fixed point
+# converges, so wait for two consecutive identical draws: that proves
+# convergence instead of catching a lucky tick.
+stable_row() { # echo the first row once two consecutive draws are identical
+  local prev='' row=''
+  for _tick in {1..20}; do
+    row="$(obs_row)"
+    [[ -n $row && $row == "$prev" ]] && break
+    prev=$row
+    sleep 0.5
+  done
+  [[ -n $row && $row == "$prev" ]] # converged
+  printf '%s\n' "$row"
+}
+
 @test "E2E: the published budget sizes the window list to the client" {
   start_server
   load_conf
@@ -226,25 +244,55 @@ row_width() { obs_row | wc -m; }
   tmux select-window -t base:2
   attach_observer
   wait_until 15 row_ready
-  # the row and the published field only agree once the budget's fixed point
-  # converges, so wait for two consecutive identical draws: that proves
-  # convergence instead of catching a lucky tick.
-  local prev='' row=''
-  for _tick in {1..20}; do
-    row="$(obs_row)"
-    [[ -n $row && $row == "$prev" ]] && break
-    prev=$row
-    sleep 0.5
-  done
-  [[ -n $row && $row == "$prev" ]] # converged
+  local row field
+  row="$(stable_row)"
   # the field is published and sane (the shipped 32 fallback would also pass,
   # so the gap and clip checks below carry the sizing claim)
-  local field
   field=$(tmux show-options -gv @sl_tw | awk '{print $NF}')
   [[ $field =~ ^[0-9]+$ ]] && ((field > 0))
   # nothing clipped
-  row="$(obs_row)"
   [[ $row != *'<'* && $row != *'>'* ]]
   # the row fills the client: no short tail, and no clip markers above
   [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+}
+
+# scripts/lockchip.sh emits ' #[fg=…]<glyph> ' (3 cells) inside the session
+# chip when the leader is locked, and tmux's #{w:} primitive measures the
+# status-left's #() job as zero width, so those cells are outside the left
+# block's term: locking without a term of its own leaves the row short by 3.
+# `set -g prefix None` is exactly what _is_locked tests.
+@test "E2E: a locked leader keeps the budget flush" {
+  start_server
+  load_conf
+  load_real_script
+  attach_observer
+  wait_until 15 row_ready
+  tmux set -g prefix None # the leader is locked: lockchip.sh's _is_locked test
+  tmux refresh-client -S
+  wait_until 15 row_ready
+  local row
+  row="$(stable_row)"
+  [[ $row != *'<'* && $row != *'>'* ]] # nothing clipped
+  [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+}
+
+# Dragging the terminal: the job re-runs with the new #{client_width} on the
+# next status-interval tick, so each width needs its own convergence wait
+# (status-interval is 3s, see 02-core.conf). resize-window -x/-y is the
+# harness's only headless lever on a client's width.
+@test "E2E: a resize keeps the pad flush at every width" {
+  start_server
+  load_conf
+  load_real_script
+  attach_observer
+  wait_until 15 row_ready
+  local row
+  for w in 140 90; do
+    tmux resize-window -t obs -x "$w" -y 20
+    tmux refresh-client -S
+    wait_until 15 row_ready
+    row="$(stable_row)"
+    [[ $row != *'<'* && $row != *'>'* ]] # nothing clipped
+    [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+  done
 }

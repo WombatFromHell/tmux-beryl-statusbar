@@ -79,7 +79,9 @@ _sb_out_w() {
 # sizes that field once, from #{E:@sl_tw} three times, and pads the remainder,
 # so the window list is exactly as wide as the client at any width):
 #   left block (rendered width; `#()` job output is excluded by the primitive
-#   tmux offers, which is why the lockchip's own width is a separate term)
+#   tmux offers — the lockchip's 3 cells are not in it, and need no term of
+#   their own because they land in the same section as the pad, which absorbs
+#   them: probe67 held the row flush, marker-free, locked at 200/120/90/70)
 #   + this job's own output (measured by tmux's own width primitive, styles
 #     stripped — `wc -m` counts characters and drifts on the metric glyphs)
 #   + per window: the " #I " chip (digits + 2), " dot" if that window rang,

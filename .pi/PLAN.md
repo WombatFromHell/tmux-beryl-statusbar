@@ -39,16 +39,18 @@ tests already red on `main` — they are the acceptance gates, not new oracles.
 |---|---|---|---|
 | T0 | The sweep harness prints one bar row per client width. | pure refactor (harness) | sweep files gain 3 rows |
 | T1 | A bar with no attached client truncates the active title at the shipped 32-col field. | behaviour change | `statusbar-tablist-test.bats` #4 (red now) |
-| T2 | The published budget counts the **rendered** left block, not the option text. | behaviour change | new: published `@fixed_w` vs hand-counted row |
-| T3 | The lock glyph's width is inside the budget when the leader is locked. | behaviour change | new: locked sweep row is flush |
+| T2 | The published budget counts the **rendered** left block, not the option text. | re-pin (side effect of T5) | `statusbar.sh:96` measures it in cells |
+| T3 | The lock glyph's width is inside the budget when the leader is locked. | verification (no mechanism — the pad absorbs it) | new e2e test 9, locked via `prefix None` |
 | T4 | The window-list chrome is **measured** from the format, not derived term by term. | behaviour change | new: sweep flush at 1/3/5 windows |
 | T5 | The right block's variable width is inside the budget. | verification (test-only) | new: stub-script sweep row is flush |
-| T6 | A resize keeps the pad flush at every width. | behaviour change | new e2e test in `statusbar-e2e-test.bats` |
+| T6 | A resize keeps the pad flush at every width. | verification (test-only) | new e2e test 10 (`resize-window -x/-y`) |
 | T7 | The floax popup's nested client keeps its inactive window index visible. | re-pin (green since T1) | `floax-test.bats` #7 (red on `main`, green from T1) |
 | T8 | A client narrower than the budget clips the tail, not the indexes. | behaviour change | new: 40-col client renders sanely |
 
 **Landed**: T0 (`9e6226f`), T1 (`a12f2e8`), T4+T5 (`eac6c19`). Suite after
-`eac6c19`: 88 unit + 8 e2e green, 0 failures. Open: T2/T3/T6/T7/T8 gates.
+`eac6c19`: 88 unit + 8 e2e green, 0 failures. T2 landed as a side effect of T5
+(re-pin), T3 needs no mechanism (the pad absorbs the lockchip — probe67), T6's
+gate is green as a side effect. Open: T7 re-pin, T8 gate.
 
 ### T0 — the sweep harness prints one bar row per client width
 
@@ -77,19 +79,19 @@ any behaviour ticket, and is itself verified by its output.
 
 ### T2 — the budget counts the rendered left block
 
-**Value**: `@fixed_w` stops over-counting ~40 phantom columns, which is what pushed the floax popup's indexes off the bar.
-**Path**: `scripts/statusbar.sh` `_sb_fixed_w` → `tmux display -p '#{w:#{E:status-left}}'` (expands `#{}` refs, drops `#()` jobs) → `tmux set -g @fixed_w`.
-**RED**: new test — publish `@fixed_w` for a known 3-window config, then assert it equals the hand-counted `fixed_w:` from a sweep row (left chip ends col 17, right block 34, chrome from T4), within the ticket's own terms. Assert against the *rendered row*, never against a formula duplicated in the test.
-**GREEN change**: replace `tmux show -p status-left` + `_sb_visible` with the single `#{w:#{E:status-left}}` call; `_sb_visible` may become unused → delete it if so (ponytail: no dead helper).
-**Done**: sweep `fixed_w:` matches the hand count for the unlocked state.
+**Value**: `@sl_tw` stops over-counting ~40 phantom columns, which is what pushed the floax popup's indexes off the bar.
+**Path**: `scripts/statusbar.sh` `_sb_sl_tw` → `tmux display -p '#{E:status-left}'` fed through `_sb_out_w` (cells, T5) → publish.
+**RED**: new test — publish `@sl_tw` for a known 3-window config, then assert it equals the hand-counted terms from a sweep row (left chip ends col 17, right block 34, chrome from T4). Assert against the *rendered row*, never against a formula duplicated in the test.
+**GREEN change**: replace `tmux show -p status-left` + `_sb_visible` with the single `#{E:status-left}` read; `_sb_visible` becomes unused → delete it (ponytail: no dead helper).
+**Done**: landed as a side effect of T5 (`statusbar.sh:96` measures the left block in cells); no separate ticket code. **Caveat that keeps T3 honest**: `#{w:}` renders `#()` jobs as **zero width** (probe54: a status-right that is only a job measures 0), so "rendered" here excludes the lockchip — see T3.
 
 ### T3 — the lock glyph is inside the budget
 
 **Value**: with the leader locked (`prefix None`) the pad still abuts the right block instead of leaving a 3-col gap.
-**Path**: `scripts/lockchip.sh` emits its output **and** `tmux set -g @lc_w <visible width>`; `_sb_fixed_w` adds `@lc_w` (default 0).
-**RED**: new sweep-based test — lock, redraw, assert the pad's last column equals the right block's first column; today it is 3 short.
-**GREEN change**: ~3 lines in `lockchip.sh` (build the string once, publish its width, print it) + one term in the sum.
-**Done**: locked and unlocked sweep rows are both flush.
+**Path**: `tests/statusbar-e2e-test.bats` — `set -g prefix None` is exactly what `lockchip.sh`'s `_is_locked` tests, so locking is drivable headlessly; redraw, then the flush oracle.
+**RED**: new test; the left block's term excludes the job (T2's caveat), so the naive expectation is a 3-col shortfall.
+**GREEN change**: **none — the mechanism is unnecessary.** The lockchip's 3 cells land in the same section as the pad, and the pad absorbs them: probe67 held the row flush and marker-free, locked, at 200/120/90/70 (`@sl_tw` 135/55/25/5), and `@sl_tw` is identical locked vs unlocked. The `@lc_w` publish the old plan proposed is deleted before it is written; the stale comment in `statusbar.sh` saying the lockchip is "a separate term" is corrected to name the pad.
+**Done**: green e2e test (test 9), which is only meaningful because `load_real_script` now copies `lockchip.sh` — without it the job fails and the claim is vacuous (that is the test-harness bug this ticket found).
 
 ### T4 — the window-list chrome's terms are measured in cells, not hand-counted
 

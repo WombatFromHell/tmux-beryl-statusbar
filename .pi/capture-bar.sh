@@ -28,8 +28,8 @@ export HOME="$H" XDG_CONFIG_HOME="$H/.config" # tmux reads ~/.config/tmux; never
 mkdir -p -m 700 "$H/.config/tmux/scripts"
 cp tmux.conf "$SOCKDIR/tmux.conf"
 cp -r conf.d "$H/.config/tmux/"
-cp scripts/statusbar.sh scripts/statusbar-lib.bash "$H/.config/tmux/scripts/"
-chmod +x "$H/.config/tmux/scripts/statusbar.sh"
+cp scripts/statusbar.sh scripts/statusbar-lib.bash scripts/lockchip.sh "$H/.config/tmux/scripts/"
+chmod +x "$H/.config/tmux/scripts"/*.sh
 
 T -f "$SOCKDIR/tmux.conf" new-session -d -s base -x 200 -y 20 'bash --norc --noprofile'
 [[ $(T display -p -t base:1 '#{socket_path}') == "$SOCK" ]] || {

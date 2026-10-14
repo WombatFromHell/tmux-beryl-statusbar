@@ -3,13 +3,13 @@
 # row — real statusbar.sh, metrics filled (what the user sees)
 ## width 200
 sl_tw: 132
-  base   1   2  title2                                                                                                                                 3        3%|99%    2%|88%    10.14 |  14:06
+  base   1   2  title2                                                                                                                                 3        3%|99%    8%|88%    10.14 |  14:30
 ## width 140
-sl_tw: 72
-  base   1   2  title2                                                                     3        3%|99%    2%|88%    10.14 |  14:06
+sl_tw: 71
+  base   1   2  title2                                                                    3        3%|99%    22%|88%    10.14 |  14:30
 ## width 90
 sl_tw: 22
-  base   1   2  title2                   3        3%|99%    8%|88%    10.14 |  14:06
+  base   1   2  title2                   3        3%|99%    7%|88%    10.14 |  14:30
 # row — stub statusbar.sh, no live data (byte-stable baseline)
 ## width 200
 sl_tw: 22
