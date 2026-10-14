@@ -167,3 +167,21 @@ other's field and only the last writer's client can be flush (probe47: 5 widths,
 Landed evidence (sweep, one client per server, real script): rows at 200/140/90
 are exactly 200/140/90 chars with **zero** tmux truncation markers; published
 `@sl_tw` 132/72/22 (linear in the client width, as E4b predicted).
+
+## Round: the narrow client (T8)
+
+| fact | result |
+|---|---|
+| `#{?#{@x},A,B}`, `@x` = `0` / empty | `B` — 0 is false in a condition (tmux 3.8) |
+| `#{?#{@sl_tw}, <title group> ,}`, `@sl_tw` 32 / 5 / 0 | full title / `methy…` / group not drawn, indexes intact |
+
+So `@sl_tw` carries both facts it needs — its width, and "no title" when the
+width is under the minimum — and the guard must sit **outside** `#{=/N/:}`,
+where a 0 would mean "no limit". `statusbar.sh` publishes 0 below 4 columns
+instead of clamping at 1; no new option, no second truncation layer.
+
+Ladder (2-window client, real script): 70 keeps `methy…`; 60 goes from `m…  >`
+(the inactive index already clipped) to both indexes visible, no markers, row
+57 ≤ 60. At 50/40 the list chrome itself stops fitting, so tmux truncates the
+whole list — not something the title term can rescue, and the ceiling moves
+with the window count (the 3-window golden sweep still shows `<   2   >` at 60).

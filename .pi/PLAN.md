@@ -48,9 +48,11 @@ tests already red on `main` — they are the acceptance gates, not new oracles.
 | T8 | A client narrower than the budget clips the tail, not the indexes. | behaviour change | new: 40-col client renders sanely |
 
 **Landed**: T0 (`9e6226f`), T1 (`a12f2e8`), T4+T5 (`eac6c19`), T2 re-pin, T3+T6
-(`19d06e2`). Suite after `19d06e2`: 88 unit + 10 e2e green, 0 failures. Open:
-T7 re-pin, T8 gate (40-col client; probe67 already holds 70 flush, so T8's
-subject is narrower than the plan assumed).
+(`19d06e2`), T7 re-pin (floax 8/8 green, no change), T8 (`d731c21`). Suite after
+`d731c21`: 91 tests across 6 files, 0 failures. Open: nothing — the plan is
+fully landed. The known ceiling lives in `conf.d/04-statusbar.conf`: below the
+point where the list chrome itself stops fitting, tmux truncates the whole list
+and the indexes go; the title term cannot rescue that, and does not try to.
 
 ### T0 — the sweep harness prints one bar row per client width
 
