@@ -47,6 +47,9 @@ tests already red on `main` — they are the acceptance gates, not new oracles.
 | T7 | The floax popup's nested client keeps its inactive window index visible. | re-pin (green since T1) | `floax-test.bats` #7 (red on `main`, green from T1) |
 | T8 | A client narrower than the budget clips the tail, not the indexes. | behaviour change | new: 40-col client renders sanely |
 
+**Landed**: T0 (`9e6226f`), T1 (`a12f2e8`), T4+T5 (`eac6c19`). Suite after
+`eac6c19`: 88 unit + 8 e2e green, 0 failures. Open: T2/T3/T6/T7/T8 gates.
+
 ### T0 — the sweep harness prints one bar row per client width
 
 **Value**: the before/after artifact can show the bar at 200/140/90, which is
