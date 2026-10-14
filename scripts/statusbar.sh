@@ -64,31 +64,31 @@ _sb_opts() {
 }
 
 # _sb_out_w TEXT -> publish TEXT as @sb_out (scratch) and echo the CELLS TEXT
-# occupies on the status line. tmux's own width primitive is the base measure —
-# it strips the #[...] style markers the conf wraps output in, which `wc -m`
-# cannot. It is not the whole story: the private-use nf-icons it measures as
-# zero-width are still drawn in a cell, so each of those is added back (round 3,
-# E4e: the drawn left block was one cell wider than #{w:} reported).
+# occupies on the status line. tmux's own width primitive is the measure: it
+# strips the #[...] style markers `wc -m` cannot see, and it already counts the
+# private-use nf-icons as one cell each (tmux 3.8). Adding a cell back per glyph
+# double-counts: the bar drew 5 cells short of the client, a sliver of bar colour
+# between the last tab chip and the right block.
 _sb_out_w() {
   tmux set -g @sb_out "$1"
-  local w plain
+  local w
   w=$(tmux display -p '#{w:#{E:@sb_out}}' 2>/dev/null)
   [[ $w =~ ^[0-9]+$ ]] || w=0
-  plain=${1//[$'\ue000'-$'\uf8ff']/}
-  echo $((w + ${#1} - ${#plain}))
+  echo "$w"
 }
 
 # _sb_sl_tw — publish @sl_tw, the active chip's title field (cells) for the next
 # draw: the client's width minus everything else the bar draws. 04-statusbar.conf
-# sizes that field from #{E:@sl_tw} and pads the remainder, so the window list is
-# as wide as the client that drew last (server-global option, no per-client state
-# -> last draw wins). 0 means "no room for a title": the conf's guard then drops
-# the whole title group. Every input is measured in cells, not hand-counted:
-# left block, this job's own output, per-window chip chrome (" #I ", optional
-# " dot", active-title padding), one @sl_gap_pad between windows, and the two
-# format spaces.
+# uses #{E:@sl_tw} as a truncation limit only — a longer title is middle-cut and
+# tmux's own fill takes the leftover space in the bar's colour (server-global
+# option, no per-client state -> last draw wins). 0 means "no room for a title":
+# the conf's guard then drops the whole title group. Every input is measured in
+# cells, not hand-counted: left block, this job's own output, per-window chip
+# chrome (" #I ", optional " dot", the active chip's two title margins), one
+# @sl_gap_pad between windows, the lock chip when the leader is locked, and the
+# two format spaces.
 _sb_sl_tw() {
-  local lw rows idx bell act n=0 sum=0 vis field
+  local lw rows idx bell act lock=0 n=0 sum=0 vis field
   [[ $sb_client_w =~ ^[0-9]+$ ]] || return 0 # no client -> keep the shipped field
   # the left block as tmux renders it, in cells (see _sb_out_w)
   lw=$(_sb_out_w "$(tmux display -t "$sb_session" -p '#{E:status-left}' 2>/dev/null)")
@@ -106,10 +106,15 @@ _sb_sl_tw() {
   done <<<"$rows"
   ((n)) || return 0
   sum=$((sum + n - 1)) # @sl_gap_pad between windows
+  # the session chip's #() job is not part of the format's width term, so the
+  # lock glyph's cells are asked from autolock.sh, the single owner of lock state
+  # (the same door lockchip.sh uses): without them the list is 3 cells too wide
+  # and tmux clips the row.
+  "${BASH_SOURCE[0]%/*}/autolock.sh" locked && lock=3
   # the job's own output, measured by tmux's own width primitive (see above)
   vis=$(_sb_out_w "$1")
   [[ $vis =~ ^[0-9]+$ ]] || vis=0
-  sum=$((sum + lw + vis + 2)) # blocks + the two format spaces
+  sum=$((sum + lw + vis + 2 + lock)) # blocks + the two format spaces + lock chip
   field=$((sb_client_w - sum))
   # under 4 columns a title is a fragment: publish 0 and the conf's
   # #{?#{@sl_tw},...} guard drops the whole title group, leaving the teal
@@ -119,10 +124,10 @@ _sb_sl_tw() {
   tmux set -g @sl_tw "$field"
 }
 
-# _sb_stamp -> the conf-owned inputs (one read) + the time strings. The lib's
-# _sb_time takes DATE/CLOCK as arguments, so nothing here is a cross-file global.
+# _sb_stamp -> the time strings. The conf-owned inputs are read at the top level,
+# before the detached fetch forks. The lib's _sb_time takes DATE/CLOCK as
+# arguments, so nothing here is a cross-file global.
 _sb_stamp() {
-  _sb_opts
   date_str=$(date +%m.%d)
   clock=$(date +"$(_sb_clock_fmt "$clock_fmt")")
 }
@@ -163,6 +168,10 @@ _sb_fetch() {
 _sb_lock
 now=$(date +%s)
 _sb_read_state
+# read once, before the fork: the detached fetch composes the metric chips, so it
+# needs the palette too, and a palette read only in the renderer leaves the cached
+# line with empty #[bg=] terms, which tmux paints in the bar's own colour.
+_sb_opts
 ready=0
 [[ -f $_sb_state ]] && ready=1
 if ((now - SB_LAST >= $(_sb_interval))); then

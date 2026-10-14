@@ -3,7 +3,7 @@ set -euo pipefail
 # capture-bar.sh — render the shipped status bar in a throwaway tmux server and
 # dump everything a client can observe, so a before/after pair can be diffed.
 #
-#   .pi/capture-bar.sh .pi/golden-pre.txt
+#   helpers/capture-bar.sh OUTFILE   (WIDTHS env overrides the 200 140 90 sweep)
 #
 # Isolation mirrors tests/test_helper.bash: private socket dir, scratch HOME
 # holding the shipped conf, so ~ and ~/.config/tmux never resolve to the user's

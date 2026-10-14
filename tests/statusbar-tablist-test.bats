@@ -54,6 +54,22 @@ pin_windows() {
   [[ $bell_unit == *'@c_red'* ]]
 }
 
+# The active chip's title group must be content-width: the conf sizes it with a
+# truncation term only. A pad term inside that group paints @c_s1 across the free
+# space, which is what made the title read as stretched to the client width.
+@test "tab list: the active title group is content-width, not padded" {
+  stub_bar
+  pin_windows
+  tmux select-window -t base:1
+  local raw s1 t1 run
+  raw="$(tmux display -p -t base:0 '#{E:@sl_windows_fmt}')"
+  s1=$(tmux show-options -gv @c_s1)
+  t1=$(tmux show-options -gv @c_t1)
+  run=${raw#*"#[bg=$s1]#[fg=$t1]"}
+  run=${run%%'#['*}
+  [[ ${#run} -eq 8 ]] # " title1 ": the chip's leading space, the title, its margin
+}
+
 @test "tab list: fish-middle-truncated title (already has …) never double-ellipsizes" {
   stub_bar
   # fish middle-truncates a long CWD to head + '…' + tail (fish

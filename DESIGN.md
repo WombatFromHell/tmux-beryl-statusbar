@@ -21,6 +21,7 @@ name over line number, so this stays true as the files move.
 | `scripts/lockchip.sh` | `status-left` job: emits the lock glyph when locked |
 | `scripts/bell.sh` | the per-window `@bell` flag and the sound |
 | `scripts/_env.bash` | the PATH tail every `#()` child shares (sourced by the three jobs) |
+| `helpers/capture-bar.sh` | the eyeball harness: one bar row per client width, not a gate |
 | `tests/` | bats suite — the gate (see Testing) |
 
 ## 1. Config layering and PATH
@@ -45,7 +46,9 @@ Leader is `C-s` (`set -g prefix C-s`). `<leader>r` reloads the config and runs
 new windows (`c`) inherit `#{pane_current_path}`; `<` / `>` swap windows.
 Vi-mode copy uses `#{@copycmd}` (`wl-copy` → `pbcopy` → `xclip`) through
 `copy-pipe-and-cancel`, because popups drop OSC 52 (tmux#4797) and the server
-can still reach the system clipboard. Navigation without the leader: alt-arrows,
+can still reach the system clipboard. Selection is `v`, commit is `y` (and mouse
+release), both through the same `#{@copycmd}`; `PageUp`/`PageDown` and `C-u`/`C-d`
+scroll copy mode. Navigation without the leader: alt-arrows,
 `C-M-hjkl` (forces past vim's own hjkl), `M-h`/`M-l` for windows, `M-HJKL` to resize.
 `F12` calls `autolock.sh toggle` from both the normal and the `off` key-table.
 
@@ -57,6 +60,13 @@ because `#{client_width}` is only populated inside a draw expansion, and the
 job's own current session is the **client's**, not the drawn one when an
 observer is attached — so window queries must name the drawn session and the
 width must come from the expansion.
+
+`status-left` is the lock glyph plus two chips: `@sl_session` (teal, the session
+name, with the `#()` lock job at its top level) and `@sl_command`, the foreground
+procname, hidden when it matches `@sl_command_ignore` (`^(bash|zsh|fish|tmux)$`)
+— a shell or tmux itself is noise, a real command is not. `run-shell` composes
+the two into `status-left` at load, because `set -g` would store the `#{@sl_*}`
+names instead of their values.
 
 tmux spawns `#()` children on status ticks **and** on job-completion redraws,
 which is back-to-back, so the script enforces "no pull faster than
@@ -80,13 +90,21 @@ Composition is split so it is testable without tmux:
   GPU provider precedence NVIDIA → AMD → Intel dGPU → Intel iGPU; a provider
   that reports nothing returns 1 and the bar hides that block. CPU/RAM are pure
   math (`cpu_delta`, `ram_pct`); the Darwin path feeds `cpu_darwin`/`ram_darwin`
-  the raw `top -l 2` and `vm_stat` output. Battery: `_batt_is_ac` decides the
-  charging icon, otherwise a tiered level icon.
-- `compose_metrics` emits one chip per metric (`_sb_chip`), hidden blocks emit
-  zero characters, so gaps never double up.
+  the raw `top -l 2` and `vm_stat` output (`ram_darwin` also takes `hw.memsize`).
+  Battery: `batt_linux`/`batt_darwin` read the percentage and state, `_batt_is_ac`
+  decides the charging icon, `_batt_icon` picks a tiered level glyph otherwise.
+  Drivers that report `Unknown` while plugged in are settled by `_ac_online`, which
+  reads the AC adapter's `online` file.
+- `_tout` wraps every GPU probe in `timeout` (`gtimeout` on macOS, run bare when
+  neither exists), so a hung vendor tool cannot stall a draw.
+- `compose_metrics` emits one chip per metric (`_sb_chip`, plus `_sb_batt` for the
+  battery), hidden blocks emit zero characters, so gaps never double up.
 - The palette has one owner: `04-statusbar.conf` sets `@c_*`, `statusbar.sh`
   reads them in a single `tmux display` call (`_sb_opts`), the library takes
-  them as inputs. Same for `@clock-format` (`_sb_clock_fmt` maps 12/24).
+  them as inputs. Same for `@clock-format` (`_sb_clock_fmt` maps 12/24). The palette
+  also pins the chrome outside the bar: `message-style`, `mode-style`,
+  `pane-active-border-style` (teal marks the selected pane), `pane-border-style`,
+  `popup-style`, `popup-border-style`.
 - The time block (calendar + clock) is composed in the script, since it is
   static per pull; `date` is read by the consumer, never by the library, so the
   block stays fixture-testable.
@@ -94,13 +112,17 @@ Composition is split so it is testable without tmux:
 The width budget is the subtle part. tmux cannot expand a width argument inside
 `#{=…/…}` from an option, so the active chip's title field is a **published
 integer**: `statusbar.sh` computes `@sl_tw` = client width minus everything else
-the bar draws, and `04-statusbar.conf` sizes the active chip's title from
-`#{E:@sl_tw}` and pads the remainder. Inputs are measured, not hand-counted:
+the bar draws, and `04-statusbar.conf` uses `#{E:@sl_tw}` as a **truncation limit
+only**: a title longer than the field is middle-cut, and tmux's own fill takes the
+leftover space in the bar's colour. Inputs are measured, not hand-counted:
 `_sb_out_w` uses tmux's own `#{w:}` primitive (it strips `#[…]` markers, which
-`wc -m` cannot) and adds back the private-use Nerd Font glyphs it measures as
-zero width but still draws. `@sl_tw` is server-global — the last-drawn client
-wins the field; `0` means "no room for a title" and the conf's guard drops the
-whole title group, because `0` in a truncation term would read as "no limit".
+`wc -m` cannot, and already counts the private-use Nerd Font glyphs as one cell
+each). `@sl_tw` is server-global — the last-drawn client wins the field; `0` means
+"no room for a title" and the conf's guard drops the whole title group, because
+`0` in a truncation term would read as "no limit"; `_sb_sl_tw` publishes `0` under
+4 cells, since a shorter title is a fragment, and leaves `@sl_tw` at its current
+value (the shipped `32` before the first draw) when there is no client width or no
+windows to measure.
 
 ## 4. Autolock
 
@@ -144,12 +166,14 @@ referenced once per chip branch so the styling lives in one place.
 
 ## 6. floax floating pane
 
-`M-p` opens a `display-popup` running a nested `tmux attach-session -t floax`;
-the nested client renders the persistent `floax` session's status bar, which is
-the tab bar. A `session-created` hook clears that session's own
-`status-left`/`status-right` so only the tab bar shows. The bar is shown only
-while floax has more than one window — `window-linked`/`window-unlinked` hooks
-flip `set -t floax status on|off` (both run after the window list updates, and
+`M-p` toggles the popup: from inside floax it detaches the client (the session
+persists), otherwise it ensures the session exists, clears `@floax_bell`, and opens
+a `display-popup` at 80% x 80% with a rounded border, running a nested
+`tmux attach-session -t floax`. The nested client renders the persistent `floax`
+session's status bar, which is the tab bar. A `session-created` hook clears that
+session's own `status-left`/`status-right` so only the tab bar shows. The bar is
+shown only while floax has more than one window — `window-linked`/`window-unlinked`
+hooks flip `set -t floax status on|off` (both run after the window list updates, and
 `window-closed` is avoided because it is master-only).
 
 Tabs are keyboard-driven, deliberately: the popup pane is flagged
@@ -157,6 +181,20 @@ Tabs are keyboard-driven, deliberately: the popup pane is flagged
 never mouse keys, so `#[range=window|…]` clicks cannot switch floax windows.
 `M-h`/`M-l` do reach the nested client and move its active window; the tab bar
 is the visual indicator of which one is active.
+
+## 7. Terminal defaults (`02-core.conf`)
+
+`escape-time 0` and `extended-keys` in `csi-u` form send whole escape sequences to
+the outer terminal; `allow-passthrough on` lets sequences tmux cannot parse reach it
+untouched; `set-clipboard on` lets tmux write the clipboard over OSC 52. Windows and
+panes are 1-based and renumbered on close; `history-limit` is 100000, `display-time
+4000` keeps a message up for four seconds, `mouse on`, `window-size latest` with
+`aggressive-resize`. The bar sits at `status-position top`, and
+`status-left-length 100` / `status-right-length 120` are the truncation limits
+`status-format[0]` applies to each side. Titles: `set-titles on` with
+`set-titles-string "#{session_name}:#{window_index} #T"`, and windows auto-rename
+from `#{pane_title}`, so the OS window title tracks the selected pane and the tab
+chip reads the same string.
 
 ## Data flow
 
@@ -193,19 +231,19 @@ server and the user's dotfiles are unreachable.
   and rendered-row assertions (`statusbar-e2e-test.bats`,
   `statusbar-tablist-test.bats`, `autolock-e2e-test.bats`, `floax-test.bats`).
 
-`bats tests/*.bats` — 86 tests, ~21s. Convergence waits poll through the helper's
-`wait_until` (and `stable_row`, which waits for two identical draws) instead of
-fixed slack; the remaining `sleep`s are fixtures (`sleep 60` as the locked proc)
-and the pacing test's observation loop. `.pi/capture-bar.sh` renders the bar at several widths into a file for
-eyeballing; the suite, not the golden files, is the gate.
+`bats tests/*.bats` is the gate. Convergence waits poll through the helper's
+`wait_until`; `stable_row` (defined in `statusbar-e2e-test.bats`, not the helper)
+waits for two identical draws before asserting. The remaining `sleep`s are fixtures
+(`sleep 60` as the locked proc) and the pacing test's observation loop.
+`helpers/capture-bar.sh` renders the bar at several widths into a file for eyeballing;
+it is a helper, not a gate, and nothing in `tests/` runs it.
 
 ## Ceilings (deliberate — do not "fix" without a test showing drift)
 
 - `@sl_tw` is server-global and `client_width` is per-client: the last-drawn
   client wins the field, others show tmux's `< >` markers.
-- 1-digit window index assumed; 10+ windows add chrome the budget does not model.
-- `#{w:}` measures the private-use Nerd Font glyphs as zero width; `_sb_out_w`
-  adds them back.
+- `#{w:}` counts the private-use Nerd Font glyphs as one cell each (tmux 3.8);
+  `_sb_out_w` measures with it unchanged.
 - `flock` is absent on stock macOS, so `statusbar.sh` may rarely do double work.
 - The Darwin parsers and the Intel iGPU provider are live code (the owner runs
   macOS on an Intel iGPU) — they are not dead code to delete.
@@ -213,9 +251,10 @@ eyeballing; the suite, not the golden files, is the gate.
 ## Docs map
 
 - `DESIGN.md` (this file) is the current truth for names and mechanisms.
-- `.pi/FINDINGS.md`, `.pi/PLAN.md`, `.pi/REVIEW.md` are the smart-width ticket
-  history. They name `@fixed_w`, `@sr_w`, `tabwidth.sh`, `#{p<N>:…}` — none of
-  which exist now; the shipped equivalents are `@sl_tw` and `_sb_sl_tw`. Read
-  them for *why*, not for names.
-- `.pi/review/*.md` is the streamlining/DRY review ledger: what landed, what was
-  rejected, and the evidence for each.
+- `helpers/capture-bar.sh` is the eyeball harness. It prints one bar row per client
+  width, so a before/after pair of its output can be diffed; nothing in `tests/`
+  reads it.
+- `.pi/` is scratch for the plan gate. It does not survive refactors and is not
+  project truth, so nothing here cites it. The smart-width ticket names that used
+  to live there (`@fixed_w`, `@sr_w`, `tabwidth.sh`, `#{p<N>:…}`) are gone; the live
+  spellings are `@sl_tw` and `_sb_sl_tw`.

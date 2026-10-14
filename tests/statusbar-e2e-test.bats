@@ -26,11 +26,15 @@ teardown() {
 # output. The time block never contains '%', so a '%' in the bottom row
 # proves the job ran. The client is wide so the right-aligned status-right
 # is not clipped.
-attach_observer() {
-  tmux new-session -d -s obs -x 200 -y 20 'env -u TMUX tmux attach-session -t base'
+attach_observer() { attach_observer_at 200; }
+# The same client at a given width, for claims about a narrow bar.
+attach_observer_at() {
+  tmux new-session -d -s obs -x "$1" -y 20 'env -u TMUX tmux attach-session -t base'
 }
 # The conf pins status-position top, so the status line is the first row.
 obs_row() { tmux capture-pane -p -t obs | head -1; }
+# The same row with its colours, for claims about which cells are painted over.
+obs_esc() { tmux capture-pane -e -p -t obs | head -1; }
 row_has_metrics() { [[ "$(obs_row)" == *'%'* ]]; }
 row_nonempty() { [[ -n "$(obs_row)" ]]; }
 # Decorated ready-state draw: metric blocks (%) and calendar (MM.DD) present
@@ -181,34 +185,113 @@ state_has_metrics() { [[ "$(sed -n 2p "$T/sb-state" 2>/dev/null)" == *%* ]]; }
 }
 
 # --- budget oracle -----------------------------------------------------------
-# statusbar.sh publishes @sl_tw, the active chip's title field for the next
-# draw: the client's width minus everything else the bar draws. 04-statusbar.conf
-# sizes that field once (#{E:@sl_tw} three times) and pads the remainder, so the
-# window list must end where the right block begins. Two ways to be wrong, both
-# observable: over-count clips the list (tmux draws its < > truncation markers),
-# under-count leaves base-colour space there. The pad inside the active chip
-# carries the chip bg (@c_s1), so a flush bar has exactly one base-colour space
-# before the right block: the conf's `#[nolist align=right range=right default] `
-# _sb_sl_tw sizes the window list to the client, so the drawn row must fill the
-# client exactly: an over-count clips (tmux draws its < > truncation markers,
-# asserted below), an under-count leaves the row short of the last column. The
-# right block ends with the clock, so the row has no trailing spaces to strip
-# and its own width is the observable for both directions of the error.
+# statusbar.sh publishes @sl_tw, the active chip's title field for the next draw:
+# the client's width minus everything else the bar draws. 04-statusbar.conf uses
+# it as a truncation limit only, so the free space is tmux's own fill and a padded
+# `capture-pane -p` row cannot show it: `wc -m` of that row is the client width
+# whether or not the budget is right. The observable errors are the list being
+# clipped (tmux draws its < > markers) and a title that fits the field rendering
+# cut; both directions of the error are asserted by the field-boundary test below.
 row_width() { obs_row | wc -m; }
 
 # The row and the published field only agree once the budget's fixed point
 # converges, so wait for two consecutive identical draws: that proves
 # convergence instead of catching a lucky tick.
-stable_row() { # echo the first row once two consecutive draws are identical
+stable_draw() { # $1: name of a zero-arg row function
   local prev='' row=''
   for _tick in {1..20}; do
-    row="$(obs_row)"
+    row="$($1)"
     [[ -n $row && $row == "$prev" ]] && break
     prev=$row
     sleep 0.5
   done
   [[ -n $row && $row == "$prev" ]] # converged
   printf '%s\n' "$row"
+}
+stable_row() { stable_draw obs_row; }
+stable_esc() { stable_draw obs_esc; }
+
+# The SGR tmux emits for a palette colour used as a background, so a test can
+# point at the cells that colour paints without hardcoding the triplet.
+sgr_bg() { local h=${1#\#}; printf '\033[48;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"; }
+# The same for a foreground colour.
+sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"; }
+
+# The metric chips are composed inside the detached pull, so the palette read
+# (_sb_opts) has to happen before that subshell forks. Read it only in the
+# renderer (_sb_stamp, as it was) and the fetch composes empty terms: the cached
+# line carries `#[bg=] #[fg=]`, which tmux paints with the bar's own colour, while
+# the renderer's own time block keeps its colours. That asymmetry is the defect.
+@test "E2E: the detached pull composes with the palette it owns" {
+  real_bar
+  attach_observer
+  wait_until 15 row_ready
+  local s0
+  s0=$(tmux show-options -gv @c_s0)
+  [[ $s0 == \#[0-9a-fA-F][0-9a-fA-F]* ]] # the conf owns the chip colour
+  # the cached metric line is replayed verbatim, so it must already carry it
+  [[ "$(sed -n 2p "$T/sb-state")" == *"bg=$s0"* ]]
+}
+
+# The published field is a truncation limit, so a title that fits it renders whole.
+# Over-measuring the bar's own blocks shrinks the field and tmux clips such a title
+# with its own ellipsis; the shipped _sb_out_w used to add a cell back per
+# private-use nf-icon on top of tmux 3.8's #{w:}, which already counts those cells.
+@test "E2E: a title that fits the published field renders whole" {
+  real_bar
+  tmux new-window -d -n tab2 'bash --norc --noprofile'
+  tmux set-window -t base:1 automatic-rename off
+  tmux select-window -t base:1
+  attach_observer
+  wait_until 15 row_ready
+  local field title esc
+  field=$(tmux display -p '#{E:@sl_tw}')
+  [[ $field =~ ^[1-9][0-9]*$ ]]
+  title=$(printf 't%.0s' $(seq 1 "$field")) # exactly the field, no more
+  tmux select-pane -t base:1 -T "$title"
+  tmux refresh-client -S
+  wait_until 15 row_ready
+  esc="$(stable_esc)"
+  [[ $esc == *"$title"* ]] # nothing clipped
+}
+
+# The active chip's coloured band must hug its content: the free space belongs to
+# tmux's own fill, not to the chip. A pad term inside the styled title group paints
+# @c_s1 over that space, so the band keeps running past the title's trailing margin.
+@test "E2E: the active chip's colour hugs its title" {
+  real_bar
+  tmux new-window -d -n tab2 'bash --norc --noprofile'
+  tmux set-window -t base:1 automatic-rename off
+  tmux select-window -t base:1
+  tmux select-pane -t base:1 -T 'fixed title'
+  attach_observer
+  wait_until 15 row_ready
+  local esc seq
+  esc="$(stable_esc)"
+  seq=$(sgr_bg "$(tmux show-options -gv @c_s1)")
+  [[ $esc == *"$seq fixed title "* ]]   # the band opens with the title
+  [[ $esc != *"$seq fixed title  "* ]]  # and closes after its own margin
+}
+
+# The free space between the window list and the right block is tmux's own fill,
+# painted with the bar's colour (@c_base), so the cell before the right block's
+# first chip carries that colour. The right block starts with a space painted
+# @c_s0 followed by the chip's icon in @c_t1, which is the only place in the row
+# where that pair of colours appears back to back.
+@test "E2E: the free space is the bar's own colour" {
+  real_bar
+  tmux new-window -d -n tab2 'bash --norc --noprofile'
+  attach_observer
+  wait_until 15 row_ready
+  local esc base gap needle before_block
+  esc="$(stable_esc)"
+  base=$(sgr_bg "$(tmux show-options -gv @c_base)")
+  gap=$(printf '%*s' 20 '') # a run no chip margin can produce
+  [[ $esc == *"$base$gap"* ]] # the fill is one long bar-coloured run
+  needle="$(sgr_bg "$(tmux show-options -gv @c_s0)") $(sgr_fg "$(tmux show-options -gv @c_t1)")"
+  before_block=${esc%%"$needle"*}
+  before_block=${before_block%"${before_block##*[! ]}"} # the gap's own cells
+  [[ $before_block == *"$base" ]] # it ends in the bar's colour, not a chip's
 }
 
 @test "E2E: the published budget sizes the window list to the client" {
@@ -220,14 +303,28 @@ stable_row() { # echo the first row once two consecutive draws are identical
   wait_until 15 row_ready
   local row field
   row="$(stable_row)"
-  # the field is published and sane (the shipped 32 fallback would also pass,
-  # so the gap and clip checks below carry the sizing claim)
+  # the field is published and positive (the shipped 32 fallback would also pass,
+  # so the clip check below carries the sizing claim)
   field=$(tmux show-options -gv @sl_tw | awk '{print $NF}')
   [[ $field =~ ^[0-9]+$ ]] && ((field > 0))
   # nothing clipped
   [[ $row != *'<'* && $row != *'>'* ]]
-  # the row fills the client: no short tail, and no clip markers above
-  [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+}
+
+# The title shrinks first, then the tabs themselves: once the window chrome no
+# longer fits the space, tmux marks the cut end with its > marker. The pad used
+# to size the list exactly to the space, so that state never arrived.
+@test "E2E: the window list marks the cut when the tabs stop fitting" {
+  real_bar
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    tmux new-window -d -n "tab$i" 'bash --norc --noprofile'
+  done
+  attach_observer_at 60
+  wait_until 15 row_ready
+  local row
+  row="$(stable_row)"
+  [[ $row == *'>'* ]] # the cut end is marked, not silently chopped
 }
 
 # scripts/lockchip.sh emits ' #[fg=…]<glyph> ' (3 cells) inside the session
@@ -245,14 +342,14 @@ stable_row() { # echo the first row once two consecutive draws are identical
   local row
   row="$(stable_row)"
   [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
-  [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+  [[ $(tmux show-options -gv @sl_tw | awk '{print $NF}') =~ ^[1-9] ]] # the field still fits a title
 }
 
 # Dragging the terminal: the job re-runs with the new #{client_width} on the
 # next status-interval tick, so each width needs its own convergence wait
 # (status-interval is 3s, see 02-core.conf). resize-window -x/-y is the
 # harness's only headless lever on a client's width.
-@test "E2E: a resize keeps the pad flush at every width" {
+@test "E2E: a resize follows the new client width" {
   real_bar
   attach_observer
   wait_until 15 row_ready
@@ -263,7 +360,7 @@ stable_row() { # echo the first row once two consecutive draws are identical
     wait_until 15 row_ready
     row="$(stable_row)"
     [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
-    [[ $(row_width) -eq $(tmux display -p '#{client_width}') ]] # flush
+    [[ $(tmux show-options -gv @sl_tw | awk '{print $NF}') =~ ^[1-9] ]] # the field follows the width
   done
 }
 
