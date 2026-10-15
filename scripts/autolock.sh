@@ -18,6 +18,7 @@ LOCKED_PROCS=${AUTOLOCK_PROCS:-'ssh|fzf'}
 
 # shellcheck disable=SC1091
 source "${BASH_SOURCE[0]%/*}/_env.bash"
+# shellcheck disable=SC1091
 source "${BASH_SOURCE[0]%/*}/autolock-lib.bash"
 
 # --- tmux state accessors --------------------------------------------------

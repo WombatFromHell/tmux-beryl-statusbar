@@ -13,6 +13,7 @@
 exec 2>/dev/null
 # shellcheck disable=SC1091
 source "${BASH_SOURCE[0]%/*}/_env.bash"
+# shellcheck disable=SC1091
 source "${BASH_SOURCE[0]%/*}/statusbar-lib.bash"
 
 # tmux passes the session whose bar it is drawing and the width of the client
@@ -54,13 +55,18 @@ _sb_read_state() {
 }
 
 # _sb_opts -> the one tmux read for everything the conf owns that the bar
-# needs: the clock-format value and the palette the chips paint with (@c_*).
-# The conf is the single owner of both; the library stays tmux-free and takes
-# them as inputs.
+# needs: the clock-format value, the two sizing knobs, and the palette the chips
+# paint with (@c_*). The conf is the single owner of all three; the library stays
+# tmux-free and takes them as inputs. The fallbacks are for a tmux-less caller
+# (the unit tier) and match the values 04-statusbar.conf ships.
 _sb_opts() {
-  IFS='|' read -r clock_fmt _sb_s0 _sb_o2 _sb_t1 _sb_m < <(
-    tmux display -p '#{E:@clock-format}|#{E:@c_s0}|#{E:@c_o2}|#{E:@c_t1}|#{E:@c_m}' 2>/dev/null
+  IFS='|' read -r clock_fmt sb_tab_budget sb_title_floor _sb_s0 _sb_o2 _sb_t1 _sb_m < <(
+    tmux display -p \
+      '#{E:@clock-format}|#{E:@sl_tab_budget}|#{E:@sl_title_floor}|#{E:@c_s0}|#{E:@c_o2}|#{E:@c_t1}|#{E:@c_m}' \
+      2>/dev/null
   )
+  [[ $sb_tab_budget =~ ^[0-9]+$ ]] || sb_tab_budget=3
+  [[ $sb_title_floor =~ ^[0-9]+$ ]] || sb_title_floor=24
 }
 
 # _sb_out_w TEXT -> publish TEXT as @sb_out (scratch) and echo the CELLS TEXT
@@ -78,17 +84,20 @@ _sb_out_w() {
 }
 
 # _sb_sl_tw — publish @sl_tw, the active chip's title field (cells) for the next
-# draw: the client's width minus everything else the bar draws. 04-statusbar.conf
-# uses #{E:@sl_tw} as a truncation limit only — a longer title is middle-cut and
-# tmux's own fill takes the leftover space in the bar's colour (server-global
-# option, no per-client state -> last draw wins). 0 means "no room for a title":
-# the conf's guard then drops the whole title group. Every input is measured in
-# cells, not hand-counted: left block, this job's own output, per-window chip
-# chrome (" #I ", optional " dot", the active chip's two title margins), one
-# @sl_gap_pad between windows, the lock chip when the leader is locked, and the
-# two format spaces.
+# draw. The field is budgeted for the first @sl_tab_budget chips, never for the
+# live count: the chip past that budget makes the list wider than the space, so
+# tmux trims the tail chips and draws its < > markers (04-statusbar.conf owns
+# those marker screens), and the active chip survives the trim because it carries
+# list=focus. @sl_title_floor keeps that active title readable instead of letting
+# the field collapse; a title shorter than the field keeps its own width, so more
+# chips stay visible and nothing is marked. 0 means "no room for a title": the
+# conf's guard then drops the whole title group. Every input is measured in cells,
+# not hand-counted: left block, this job's own output, per-window chip chrome
+# (" #I ", optional " dot", the active chip's two title margins), the @sl_gap_pad
+# the format opens each chip with, the lock chip when the leader is locked, and
+# the format spaces.
 _sb_sl_tw() {
-  local lw rows idx bell act lock=0 n=0 sum=0 vis field
+  local lw rows idx bell act lock=0 n=0 chrome=0 avail vis field
   [[ $sb_client_w =~ ^[0-9]+$ ]] || return 0 # no client -> keep the shipped field
   # the left block as tmux renders it, in cells (see _sb_out_w)
   lw=$(_sb_out_w "$(tmux display -t "$sb_session" -p '#{E:status-left}' 2>/dev/null)")
@@ -100,12 +109,13 @@ _sb_sl_tw() {
   while IFS='|' read -r idx bell act; do
     [[ $idx =~ ^[0-9]+$ ]] || continue
     n=$((n + 1))
-    sum=$((sum + ${#idx} + 2))          # " #I " chip
-    [[ -n $bell ]] && sum=$((sum + 2))  # " dot" on a window that rang
-    [[ $act == 1 ]] && sum=$((sum + 2)) # " " before the title + trailing " "
+    chrome=$((chrome + ${#idx} + 2))          # " #I " chip
+    [[ -n $bell ]] && chrome=$((chrome + 2))  # " dot" on a window that rang
+    [[ $act == 1 ]] && chrome=$((chrome + 2)) # " " before the title + trailing " "
+    chrome=$((chrome + 1))                    # @sl_gap_pad: the format opens each chip with one
+    ((n >= sb_tab_budget)) && break           # past the budget, tmux owns the cut
   done <<<"$rows"
   ((n)) || return 0
-  sum=$((sum + n - 1)) # @sl_gap_pad between windows
   # the session chip's #() job is not part of the format's width term, so the
   # lock glyph's cells are asked from autolock.sh, the single owner of lock state
   # (the same door lockchip.sh uses): without them the list is 3 cells too wide
@@ -114,13 +124,23 @@ _sb_sl_tw() {
   # the job's own output, measured by tmux's own width primitive (see above)
   vis=$(_sb_out_w "$1")
   [[ $vis =~ ^[0-9]+$ ]] || vis=0
-  sum=$((sum + lw + vis + 2 + lock)) # blocks + the two format spaces + lock chip
-  field=$((sb_client_w - sum))
-  # under 4 columns a title is a fragment: publish 0 and the conf's
-  # #{?#{@sl_tw},...} guard drops the whole title group, leaving the teal
-  # index chip as the accent. 0 is never tmux's "no limit" here, because the
-  # guard sits outside the truncation term it would disable.
-  ((field < 4)) && field=0
+  # 3 = the two spaces the format puts around the list, plus the cell tmux 3.8
+  # spends on the list's own edge: without that cell the budget draws one cell
+  # wide and tmux marks the first chip. Measured on the shipped config: a 200-cell
+  # client with a wide title keeps 1-3 chips flush and marks at 4; the same holds
+  # at 120 cells.
+  avail=$((sb_client_w - lw - vis - lock - 3))
+  field=$((avail - chrome))
+  if ((field >= 4)); then
+    # keep the accent readable: the list overflows instead, and tmux marks it
+    ((field < sb_title_floor)) && field=$sb_title_floor
+  else
+    # under 4 columns a title is a fragment: publish 0 and the conf's
+    # #{?#{@sl_tw},...} guard drops the whole title group. 0 is never tmux's
+    # "no limit" here, because the guard sits outside the truncation term it
+    # would disable.
+    field=0
+  fi
   tmux set -g @sl_tw "$field"
 }
 

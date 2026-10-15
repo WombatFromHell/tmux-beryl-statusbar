@@ -289,8 +289,8 @@ EOF
   # GPU block (bg + icon + util + vram)
   [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]${g}#[fg=#a6adc8] 42%"* ]]
   [[ $out == *"#[fg=#6c7086]|#[fg=#a6adc8]67%"* ]]
-  # CPU block (bg + icon + util + ram)
-  [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]#[fg=#a6adc8] 15%"* ]]
+  # CPU block (icon comes from _icon, same as the GPU block)
+  [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]${c}#[fg=#a6adc8] 15%"* ]]
   [[ $out == *"#[fg=#6c7086]|#[fg=#a6adc8]80%"* ]]
   # Battery block (bg + icon + pct)
   [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]󰂄 #[fg=#a6adc8]97%"* ]]

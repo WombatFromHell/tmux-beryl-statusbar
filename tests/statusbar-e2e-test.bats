@@ -213,9 +213,15 @@ stable_esc() { stable_draw obs_esc; }
 
 # The SGR tmux emits for a palette colour used as a background, so a test can
 # point at the cells that colour paints without hardcoding the triplet.
-sgr_bg() { local h=${1#\#}; printf '\033[48;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"; }
+sgr_bg() {
+  local h=${1#\#}
+  printf '\033[48;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+}
 # The same for a foreground colour.
-sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"; }
+sgr_fg() {
+  local h=${1#\#}
+  printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+}
 
 # The metric chips are composed inside the detached pull, so the palette read
 # (_sb_opts) has to happen before that subshell forks. Read it only in the
@@ -269,8 +275,8 @@ sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2
   local esc seq
   esc="$(stable_esc)"
   seq=$(sgr_bg "$(tmux show-options -gv @c_s1)")
-  [[ $esc == *"$seq fixed title "* ]]   # the band opens with the title
-  [[ $esc != *"$seq fixed title  "* ]]  # and closes after its own margin
+  [[ $esc == *"$seq fixed title "* ]]  # the band opens with the title
+  [[ $esc != *"$seq fixed title  "* ]] # and closes after its own margin
 }
 
 # The free space between the window list and the right block is tmux's own fill,
@@ -286,12 +292,12 @@ sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2
   local esc base gap needle before_block
   esc="$(stable_esc)"
   base=$(sgr_bg "$(tmux show-options -gv @c_base)")
-  gap=$(printf '%*s' 20 '') # a run no chip margin can produce
+  gap=$(printf '%*s' 20 '')   # a run no chip margin can produce
   [[ $esc == *"$base$gap"* ]] # the fill is one long bar-coloured run
   needle="$(sgr_bg "$(tmux show-options -gv @c_s0)") $(sgr_fg "$(tmux show-options -gv @c_t1)")"
   before_block=${esc%%"$needle"*}
   before_block=${before_block%"${before_block##*[! ]}"} # the gap's own cells
-  [[ $before_block == *"$base" ]] # it ends in the bar's colour, not a chip's
+  [[ $before_block == *"$base" ]]                       # it ends in the bar's colour, not a chip's
 }
 
 @test "E2E: the published budget sizes the window list to the client" {
@@ -327,6 +333,43 @@ sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2
   [[ $row == *'>'* ]] # the cut end is marked, not silently chopped
 }
 
+# The sizing rule (DESIGN.md): the title field is budgeted for @sl_tab_budget
+# chips, not for the live count, so the chip past that budget makes the list
+# wider than the space and tmux marks the cut. @sl_title_floor keeps the active
+# title readable instead of letting the field collapse; a title shorter than the
+# field keeps its own width, so more chips stay visible and nothing is marked.
+@test "E2E: the chip past the tab budget marks the cut" {
+  real_bar
+  local i
+  for i in 1 2 3; do
+    tmux new-window -d -n "tab$i" 'bash --norc --noprofile'
+  done
+  tmux set-window -t base:3 automatic-rename off
+  tmux select-window -t base:3
+  tmux select-pane -t base:3 -T "$(printf 'w%.0s' $(seq 1 200))"
+  attach_observer
+  wait_until 15 row_ready
+  local row
+  row="$(stable_row)"
+  [[ $row == *'<'* || $row == *'>'* ]] # the cut end is marked, not silently chopped
+}
+
+@test "E2E: a short title keeps the chip budget visible" {
+  real_bar
+  local i
+  for i in 1 2 3 4 5 6; do
+    tmux new-window -d -n "tab$i" 'bash --norc --noprofile'
+  done
+  tmux set-window -t base:6 automatic-rename off
+  tmux select-window -t base:6
+  tmux select-pane -t base:6 -T 'short'
+  attach_observer
+  wait_until 15 row_ready
+  local row
+  row="$(stable_row)"
+  [[ $row != *'<'* && $row != *'>'* ]] # six chips fit: nothing to mark
+}
+
 # scripts/lockchip.sh emits ' #[fg=…]<glyph> ' (3 cells) inside the session
 # chip when the leader is locked, and tmux's #{w:} primitive measures the
 # status-left's #() job as zero width, so those cells are outside the left
@@ -341,7 +384,7 @@ sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2
   wait_until 15 row_ready
   local row
   row="$(stable_row)"
-  [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
+  [[ $row != *'<'* && $row != *'>'* ]]                                # nothing clipped
   [[ $(tmux show-options -gv @sl_tw | awk '{print $NF}') =~ ^[1-9] ]] # the field still fits a title
 }
 
@@ -359,7 +402,7 @@ sgr_fg() { local h=${1#\#}; printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2
     tmux refresh-client -S
     wait_until 15 row_ready
     row="$(stable_row)"
-    [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
+    [[ $row != *'<'* && $row != *'>'* ]]                                # nothing clipped
     [[ $(tmux show-options -gv @sl_tw | awk '{print $NF}') =~ ^[1-9] ]] # the field follows the width
   done
 }

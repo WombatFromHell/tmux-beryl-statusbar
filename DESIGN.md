@@ -111,13 +111,25 @@ Composition is split so it is testable without tmux:
 
 The width budget is the subtle part. tmux cannot expand a width argument inside
 `#{=…/…}` from an option, so the active chip's title field is a **published
-integer**: `statusbar.sh` computes `@sl_tw` = client width minus everything else
-the bar draws, and `04-statusbar.conf` uses `#{E:@sl_tw}` as a **truncation limit
-only**: a title longer than the field is middle-cut, and tmux's own fill takes the
-leftover space in the bar's colour. Inputs are measured, not hand-counted:
-`_sb_out_w` uses tmux's own `#{w:}` primitive (it strips `#[…]` markers, which
-`wc -m` cannot, and already counts the private-use Nerd Font glyphs as one cell
-each). `@sl_tw` is server-global — the last-drawn client wins the field; `0` means
+integer**: `statusbar.sh` computes `@sl_tw` and `04-statusbar.conf` uses `#{E:@sl_tw}`
+as a **truncation limit only**: a title longer than the field is middle-cut, and
+tmux's own fill takes the leftover space in the bar's colour. The field is sized
+for the first `@sl_tab_budget` chips, not for the live window count, so the chip
+past that budget makes the list wider than the space and tmux trims the tail chips
+and draws its `<` `>` markers; the active chip survives the trim because it carries
+`list=focus`. `@sl_title_floor` is the smallest field published while the chips
+still fit, so the active title stays readable and the overflow is shown instead of
+squeezed; a title shorter than the field keeps its own width, so more chips stay
+visible before anything is marked. Both knobs are owned by `04-statusbar.conf`
+(shipped `3` and `24`) and read by `_sb_opts` next to the palette. Measured on the
+shipped config: at a 200-cell client a wide title leaves 1-3 chips flush and marks
+at 4 and 6; with 30-cell titles 8 chips stay flush at 200 and at 120; at 80 cells
+three chips mark because the floor needs more than the space gives, and at 60 the
+title group is dropped. Inputs are measured, not hand-counted: `_sb_out_w` uses
+tmux's own `#{w:}` primitive (it strips `#[…]` markers, which `wc -m` cannot, and
+already counts the private-use Nerd Font glyphs as one cell each), and the chrome
+term stops at `@sl_tab_budget` chips because past that budget tmux owns the cut.
+`@sl_tw` is server-global — the last-drawn client wins the field; `0` means
 "no room for a title" and the conf's guard drops the whole title group, because
 `0` in a truncation term would read as "no limit"; `_sb_sl_tw` publishes `0` under
 4 cells, since a shorter title is a fragment, and leaves `@sl_tw` at its current
@@ -215,7 +227,7 @@ bell hook ─ bell.sh ─→ @bell / @floax_bell ─→ next draw shows the dot
 | `#()` output is one line, one `%`, no `#{}` | `statusbar.sh` header contract | e2e "attached client renders the composed status-right" |
 | at most one pull per `status-interval` | `_sb_interval`, `_sb_lock`, claim-first | e2e "data pulls paced at >= status-interval" |
 | hidden blocks emit zero characters | `compose_metrics`, `_sb_chip` | unit "compose: table — hidden blocks emit zero chars" |
-| the row fills the client and never overflows | `_sb_sl_tw` + `@sl_windows_fmt` | e2e budget / locked-leader / resize / narrow-client tests |
+| the chips up to `@sl_tab_budget` fit flush; past it the cut is marked | `_sb_sl_tw` + `@sl_windows_fmt` | e2e budget / locked-leader / resize / narrow-client / chip-past-budget tests |
 | the lock state has one owner | `autolock.sh` `lock`/`unlock` | autolock-e2e tests 1–3, lockchip tests |
 | `0` in a truncation term means "no limit" | guard in `@sl_windows_fmt` | e2e "a client narrower than the budget drops the active title" |
 

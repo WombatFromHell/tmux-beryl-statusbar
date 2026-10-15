@@ -255,6 +255,7 @@ batt_linux() {
 # Palette: caller-set inputs (_sb_s0/_sb_o2/_sb_t1/_sb_m). The conf owns the
 # colours (@c_* in 04-statusbar.conf) and statusbar.sh reads them in one tmux
 # call; the unit tier sets them as a fixture. The library stays tmux-free.
+_sb_s0=${_sb_s0-} _sb_o2=${_sb_o2-} _sb_t1=${_sb_t1-} _sb_m=${_sb_m-}
 
 # _sb_clock_fmt VALUE -> print the strftime format for the @clock-format
 # value ('12' -> 12-hour with AM/PM, anything else -> 24-hour). Pure
