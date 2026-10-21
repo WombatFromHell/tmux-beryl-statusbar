@@ -61,6 +61,31 @@ wait_until() { # seconds cmd [args...] — poll instead of sleeping
   return 1
 }
 
+# open_cmd_window [CMD...] — a window whose tty's foreground job is CMD, made
+# the active window of `base`, with no client attached: tmux refuses send-keys
+# on a conf-sourced scratch server, and typing would depend on tmux's default
+# shell parsing the line. The generated runner runs CMD as a job of an
+# interactive bash (`-i` gives it job control whatever that shell is) and `fg`s
+# it, so the job owns the tty exactly like a command typed at a prompt: its
+# pgid is the tty's tpgid, which is what tmux's pane_current_command keys on.
+# Arguments are joined and embedded verbatim, so argv is what typing would
+# give; no arguments = an idle bash. end_cmd ends the recorded job, after which
+# the runner exec's an idle bash again.
+open_cmd_window() {
+  ensure_tmp
+  if (($#)); then
+    printf '#!/bin/bash\n%s &\nprintf "%%s\n" "$!" >"%s"\nfg %%1\nexec bash --norc --noprofile\n' \
+      "$*" "$T/job.pid" >"$T/rc.sh"
+  else
+    printf '#!/bin/bash\nexec bash --norc --noprofile\n' >"$T/rc.sh"
+  fi
+  chmod +x "$T/rc.sh"
+  CMD_WIN=$(tmux new-window -d -P -F '#{window_id}' -n cmd "bash --norc --noprofile -i '$T/rc.sh'")
+  tmux select-window -t "$CMD_WIN"
+}
+# end_cmd — end the foreground job; the runner then exec's the idle bash.
+end_cmd() { kill "$(cat "$T/job.pid")" 2>/dev/null; }
+
 # Load the real tmux.conf into the scratch server. Copied into $T so ~ and
 # #{d:current_file} resolve there, never to the user's dotfiles. The main
 # conf sources conf.d/*.conf from ~, so those must land in the scratch HOME too.

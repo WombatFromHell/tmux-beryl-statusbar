@@ -23,6 +23,9 @@ _ov() { tmux show-options -gv @autolock_override 2>/dev/null; }
 # pane_cmd_is/pane_cmd_not CMD — the pane's foreground command, which is what
 # autolock's AUTOLOCK_PROCS match against. Polling it replaces the fixed sleeps
 # that used to wait for the pane to start/stop a proc (same assertions, less wall).
+# The proc comes from open_cmd_window's job, not from typing: the scratch server
+# has no client, and a session-name send-keys target stops resolving once the
+# conf is sourced (see test_helper.bash).
 pane_cmd_is() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') == "$1" ]]; }
 pane_cmd_not() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') != "$1" ]]; }
 
@@ -51,11 +54,11 @@ pane_cmd_not() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') != "$
 }
 
 @test "poll() locks when the foreground is a locked proc, unlocks when it exits" {
-  tmux send-keys -t base 'sleep 60' Enter
+  open_cmd_window sleep 60
   wait_until 5 pane_cmd_is sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
   [[ $(tmux show-options -gv prefix) == None ]]
-  tmux send-keys -t base C-c
+  end_cmd
   wait_until 5 pane_cmd_not sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh poll"
   [[ $(tmux show-options -gv prefix) != None ]]
@@ -74,7 +77,7 @@ pane_cmd_not() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') != "$
 
 @test "poll() noops when override=unlock and matched proc (honor disengage)" {
   # Matched proc in foreground. F12 disengage.
-  tmux send-keys -t base 'sleep 60' Enter
+  open_cmd_window sleep 60
   wait_until 5 pane_cmd_is sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh toggle"
   [[ $(tmux show-options -gv prefix) == None ]]
@@ -91,7 +94,7 @@ pane_cmd_not() { [[ $(tmux list-pane -t base -F '#{pane_current_command}') != "$
 
 @test "poll() clears override when auto_desired matches override (engage)" {
   # Matched proc in foreground. F12 engage. auto_desired=lock == override=lock -> clear.
-  tmux send-keys -t base 'sleep 60' Enter
+  open_cmd_window sleep 60
   wait_until 5 pane_cmd_is sleep
   tmux run-shell "AUTOLOCK_PROCS=sleep $HOME/.config/tmux/scripts/autolock.sh toggle"
   [[ $(_ov) == lock ]]
