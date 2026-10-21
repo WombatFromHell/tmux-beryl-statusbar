@@ -294,6 +294,27 @@ _sb_time() {
   fi
 }
 
+# _sb_strip RE TEXT -> TEXT without its leading words whose basename matches RE,
+# plus the flags (-x) and VAR=val words that follow each one. Front only, and never
+# to nothing: a command that is all wrapper is returned unchanged. Empty RE = off.
+# ponytail: a flag that takes a value (`sudo -u root vim`) leaves `root` behind.
+_sb_strip() {
+  local re=$1 text=$2 i=0 b
+  local -a w
+  [[ -n $re ]] || {
+    printf '%s' "$text"
+    return 0
+  }
+  read -r -a w <<<"$text"
+  while ((i < ${#w[@]})); do
+    b=${w[i]##*/}
+    [[ $b =~ $re ]] || break
+    i=$((i + 1))
+    while ((i < ${#w[@]})) && [[ ${w[i]} == -* || ${w[i]} == *=* ]]; do i=$((i + 1)); done
+  done
+  if ((i > 0 && i < ${#w[@]})); then printf '%s' "${w[*]:i}"; else printf '%s' "$text"; fi
+}
+
 # compose_metrics — gpu/cpu/battery blocks; hidden ones emit nothing.
 compose_metrics() {
   _sb_chip "$(_icon gpu)" "$gpu" "$vram"

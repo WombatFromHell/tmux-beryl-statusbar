@@ -28,6 +28,8 @@ sb_client_w="${2:-}"
 # State file: line 1 = last claim (epoch s), line 2 = last composed output.
 _sb_state="${TMUX_TMPDIR:-/tmp}/sb-state"
 
+_sb_cmd_max=15 # chip text budget in chars, the ellipsis included
+
 # _sb_lock — exclusive flock so concurrent spawns (tick + completion redraw)
 # serialize; skipped when flock is absent (stock macOS) -> rare double-work.
 _sb_lock() {
@@ -60,9 +62,9 @@ _sb_read_state() {
 # tmux-free and takes them as inputs. The fallbacks are for a tmux-less caller
 # (the unit tier) and match the values 04-statusbar.conf ships.
 _sb_opts() {
-  IFS='|' read -r clock_fmt sb_tab_budget sb_title_floor _sb_s0 _sb_o2 _sb_t1 _sb_m < <(
+  IFS='|' read -r clock_fmt sb_tab_budget sb_title_floor _sb_s0 _sb_o2 _sb_t1 _sb_m sb_cmd_strip < <(
     tmux display -p \
-      '#{E:@clock-format}|#{E:@sl_tab_budget}|#{E:@sl_title_floor}|#{E:@c_s0}|#{E:@c_o2}|#{E:@c_t1}|#{E:@c_m}' \
+      '#{E:@clock-format}|#{E:@sl_tab_budget}|#{E:@sl_title_floor}|#{E:@c_s0}|#{E:@c_o2}|#{E:@c_t1}|#{E:@c_m}|#{@sl_cmd_strip}' \
       2>/dev/null
   )
   [[ $sb_tab_budget =~ ^[0-9]+$ ]] || sb_tab_budget=3
@@ -144,6 +146,48 @@ _sb_sl_tw() {
   tmux set -g @sl_tw "$field"
 }
 
+# _sb_cmd — publish @sl_cmd / @sl_cmd_for for the command chip.
+# tmux's pane_current_command is only argv[0]. Ask the pane's tty for its foreground
+# process group instead (pgid == tpgid), prefer the group leader, and publish its args.
+_sb_cmd() {
+  local tty name pid pgid tpgid args best='' t b out=''
+  local -a w
+  read -r tty name < <(tmux display -t "$sb_session" -p \
+    '#{pane_tty} #{pane_current_command}' 2>/dev/null)
+  tty=${tty#/dev/}
+  if [[ -n $tty ]]; then
+    while read -r pid pgid tpgid args; do
+      [[ $pid =~ ^[0-9]+$ && $pgid == "$tpgid" ]] || continue
+      if [[ $pid == "$pgid" ]]; then
+        best=$args
+        break
+      fi                           # the leader
+      [[ -n $best ]] || best=$args # else first group member
+    done < <(ps -t "$tty" -o pid=,pgid=,tpgid=,args= 2>/dev/null)
+  fi
+  if [[ -z $best ]]; then
+    best=$name # resolver miss: bare name, never blank
+  else
+    best=${best#-} # login shell "-fish" -> "fish"
+  fi
+  best=$(_sb_strip "$sb_cmd_strip" "$best") # 1. drop the wrappers
+  read -r -a w <<<"$best"                   # 2. path-like words keep their basename
+  for t in "${w[@]}"; do
+    case $t in
+    /* | ./* | ../* | \~/*)
+      b=${t%/}
+      b=${b##*/}
+      [[ -n $b ]] && t=$b
+      ;;
+    esac
+    out+="${out:+ }$t"
+  done
+  best=${out:-$name}
+  ((${#best} > _sb_cmd_max)) && best="${best:0:_sb_cmd_max-1}…" # 3. cap at 15
+  best=${best//\#/##}                                           # argv must not be parsed as #[styles]
+  tmux set -g @sl_cmd "$best" \; set -g @sl_cmd_for "$name"
+}
+
 # _sb_stamp -> the time strings. The conf-owned inputs are read at the top level,
 # before the detached fetch forks. The lib's _sb_time takes DATE/CLOCK as
 # arguments, so nothing here is a cross-file global.
@@ -201,5 +245,6 @@ if ((now - SB_LAST >= $(_sb_interval))); then
 fi
 _sb_stamp
 out=$(printf '%s%s' "$SB_CACHE" "$(_sb_time "$ready" "$date_str" "$clock")")
+_sb_cmd          # command text for the next draw
 _sb_sl_tw "$out" # active-chip field for the next draw
 printf '%s' "$out"
