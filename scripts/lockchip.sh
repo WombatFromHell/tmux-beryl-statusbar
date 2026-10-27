@@ -25,5 +25,5 @@ _lock_color() {
 }
 
 if _is_locked; then
-  printf ' #[fg=%s]\uea75 ' "$(_lock_color)"
+  printf ' #[fg=%s] ' "$(_lock_color)"
 fi
