@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC1090,SC2001,SC2030,SC2031
+# shellcheck disable=SC1090,SC2001,SC2030,SC2031,SC2034
 # statusbar-unit-test.bats — unit tier for statusbar-lib.bash: pure
-# parse/compute tests (gpu providers, cpu/ram, darwin fixtures, _icon,
+# parse/compute tests (gpu providers, cpu/ram/swap, darwin fixtures, _icon,
 # compose_metrics/_sb_time, battery). No tmux server, no sleeps.
 
 bats_require_minimum_version 1.5.0
@@ -178,6 +178,23 @@ exit 1'
   [[ $ram == "75" ]]
 }
 
+@test "swap_pct: percent of the swap partition in use" {
+  source "$LIB"
+  swap_pct 1000 800
+  [[ $swap == "20" ]]
+}
+
+@test "swap_pct: no swap or garbage -> empty, never a phantom 0%" {
+  source "$LIB"
+  swap=5
+  swap_pct 0 0
+  [[ -z $swap ]]
+  swap_pct "" ""
+  [[ -z $swap ]]
+  swap_pct garbage garbage
+  [[ -z $swap ]]
+}
+
 # --- macOS fixtures ----------------------------------------------------------
 TOP='Processes: 500 total, 2 running, 498 sleeping, 2500 threads
 2026-10-04 12:00:00
@@ -280,6 +297,8 @@ EOF
   vram=67
   cpu=15
   ram=80
+  swap=12
+  sb_room=24 # the bar has spare cells, so swap may ride
   batt=97
   batt_icon="󰂄"
   local out g c
@@ -292,6 +311,8 @@ EOF
   # CPU block (icon comes from _icon, same as the GPU block)
   [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]${c}#[fg=#a6adc8] 15%"* ]]
   [[ $out == *"#[fg=#6c7086]|#[fg=#a6adc8]80%"* ]]
+  # Swap rides on the CPU chip (12% > the 5% hide threshold)
+  [[ $out == *"#[fg=#6c7086]|#[fg=#a6adc8]12%"* ]]
   # Battery block (bg + icon + pct)
   [[ $out == *"#[bg=#313244] #[fg=#cdd6f4]󰂄 #[fg=#a6adc8]97%"* ]]
   # Each visible block ends with #[default] + trailing space (separator)
@@ -395,18 +416,22 @@ EOF
 }
 
 # --- compose table -----------------------------------------------------------
-# One row per fixture, comma-separated: label, gpu, vram, cpu, ram, batt,
-# batt_icon, date_str, clock, ready, then the assertions as `kind:argument`
-# terms split by ';'. kinds: exact (whole output), has/not (substring),
+# One row per fixture, comma-separated: label, gpu, vram, cpu, ram, swap, room,
+# batt, batt_icon, date_str, clock, ready, then the assertions as `kind:argument`
+# terms split by ';'. room is _sb_room's measurement: the cells left for the
+# window-list chrome once swap is drawn — 0 or more means it fits, negative means
+# the chips would overflow, empty means unmeasured and swap never rides. kinds:
+# exact (whole output), has/not (substring),
 # plain (substring of the style-stripped output), noicon (that _icon glyph
 # absent), starts (output starts with the argument). `not:  #[` is the
 # spacing invariant — no two spaces before any style marker, so hidden blocks
 # emit zero characters and visible ones keep single gaps.
 @test "compose: table — hidden blocks emit zero chars, visible ones stay flush" {
   source "$LIB"
-  local label gpu vram cpu ram batt batt_icon date_str clock ready checks out plain term kind arg glyph fails=0 ok
-  while IFS=',' read -r label gpu vram cpu ram batt batt_icon date_str clock ready checks; do
+  local label gpu vram cpu ram swap room batt batt_icon date_str clock ready checks out plain term kind arg glyph fails=0 ok
+  while IFS=',' read -r label gpu vram cpu ram swap room batt batt_icon date_str clock ready checks; do
     [[ -z $label ]] && continue
+    sb_room=${room:-24} # swap's room gate; rows that omit it have room
     out="$(compose_metrics)$(_sb_time "$ready" "$date_str" "$clock")"
     plain="$(sed "s/#\[[^]]*\]//g" <<<"$out")"
     local -a terms
@@ -435,11 +460,14 @@ EOF
       }
     done
   done <<'EOF'
-pre-data-hidden,,,,,,,07.06,07:19,0,exact:#[fg=#6c7086]07:19 #[default]
-ready-hidden-metrics-off,,,,,,,07.06,07:19,1,has:07.06;has:07:19;not:0%
-gpu-hidden-cpu-visible,,,15,80,,,,07:19,0,starts:#[bg=#313244];noicon:gpu;not:42%;plain:15%|80%;not:  #[
-zero-values-render,0,0,0,0,0,󰂎,,07:19,0,plain:0%|0%;plain:󰂎 0%;not:  #[
-battery-visible-spacing,42,67,15,80,97,󰂄,,07:19,0,plain:42%|67%;plain:15%|80%;plain:97%;not:  #[
+pre-data-hidden,,,,,,,,07.06,07:19,0,exact:#[fg=#6c7086]07:19 #[default]
+ready-hidden-metrics-off,,,,,,,,07.06,07:19,1,has:07.06;has:07:19;not:0%
+gpu-hidden-cpu-visible,,,15,80,,,,,07:19,0,starts:#[bg=#313244];noicon:gpu;not:42%;plain:15%|80%;not:  #[
+zero-values-render,0,0,0,0,,,0,󰂎,,07:19,0,plain:0%|0%;plain:󰂎 0%;not:  #[
+swap-shown-above-5,,,15,80,6,,,,07:19,0,plain:15%|80%|6%;not:  #[
+swap-hidden-at-5,,,15,80,5,,,,07:19,0,plain:15%|80%;not:|5%;not:  #[
+swap-hidden-without-room,,,15,80,6,-4,,,07:19,0,plain:15%|80%;not:|6%;not:  #[
+battery-visible-spacing,42,67,15,80,,97,󰂄,,07:19,0,plain:42%|67%;plain:15%|80%;plain:97%;not:  #[
 EOF
   [[ $fails -eq 0 ]]
 }

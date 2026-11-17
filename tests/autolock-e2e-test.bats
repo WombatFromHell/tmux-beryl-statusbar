@@ -156,3 +156,24 @@ _lc() { TMUX="$SOCK" bash "$HOME/.config/tmux/scripts/lockchip.sh"; }
   # grep -F: a glob's [ ] would misparse the style tokens.
   grep -qF '#(bash ~/.config/tmux/scripts/lockchip.sh)#[fg=#{@c_base}]' <<<"$fmt"
 }
+
+# Where flock exists the daemon holds a lock, so a pidfile left behind by a killed
+# daemon cannot stop a later start; the pidfile is only the stock-macOS door. A
+# second start still leaves the running daemon alone.
+daemon_pid() {
+  local p
+  p=$(cat "$T/tmux-autolock.pid" 2>/dev/null) || return 1
+  [[ -n $p && $p != "$$" ]] && kill -0 "$p" 2>/dev/null
+}
+
+@test "start() restarts over a stale pidfile, and a second start leaves it alone" {
+  [[ $(type -P flock) ]] || skip "no flock (stock macOS)"
+  printf '%s\n' "$$" >"$T/tmux-autolock.pid" # stale: a live pid that is not a daemon
+  tmux run-shell -b "$HOME/.config/tmux/scripts/autolock.sh start"
+  wait_until 5 daemon_pid
+  local first
+  first=$(cat "$T/tmux-autolock.pid")
+  tmux run-shell -b "$HOME/.config/tmux/scripts/autolock.sh start"
+  sleep 1
+  [[ $(cat "$T/tmux-autolock.pid") == "$first" ]] # the second start did not replace it
+}

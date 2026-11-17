@@ -60,7 +60,9 @@ _sb_read_state() {
 # needs: the clock-format value, the two sizing knobs, and the palette the chips
 # paint with (@c_*). The conf is the single owner of all three; the library stays
 # tmux-free and takes them as inputs. The fallbacks are for a tmux-less caller
-# (the unit tier) and match the values 04-statusbar.conf ships.
+# (the unit tier) and match the values 04-statusbar.conf ships. sb_cmd_strip is
+# read last because its value is a regex full of `|` and only the final field
+# survives unsplit.
 _sb_opts() {
   IFS='|' read -r clock_fmt sb_tab_budget sb_title_floor _sb_s0 _sb_o2 _sb_t1 _sb_m sb_cmd_strip < <(
     tmux display -p \
@@ -85,21 +87,15 @@ _sb_out_w() {
   echo "$w"
 }
 
-# _sb_sl_tw — publish @sl_tw, the active chip's title field (cells) for the next
-# draw. The field is budgeted for the first @sl_tab_budget chips, never for the
-# live count: the chip past that budget makes the list wider than the space, so
-# tmux trims the tail chips and draws its < > markers (04-statusbar.conf owns
-# those marker screens), and the active chip survives the trim because it carries
-# list=focus. @sl_title_floor keeps that active title readable instead of letting
-# the field collapse; a title shorter than the field keeps its own width, so more
-# chips stay visible and nothing is marked. 0 means "no room for a title": the
-# conf's guard then drops the whole title group. Every input is measured in cells,
-# not hand-counted: left block, this job's own output, per-window chip chrome
-# (" #I ", optional " dot", the active chip's two title margins), the @sl_gap_pad
-# the format opens each chip with, the lock chip when the leader is locked, and
-# the format spaces.
-_sb_sl_tw() {
-  local lw rows idx bell act lock=0 n=0 chrome=0 avail vis field
+# _sb_room TEXT -> the CELLS the client has left for the window-list chrome once
+# TEXT (the job's whole right block) is drawn. Negative means the chips themselves
+# no longer fit; empty when there is no client to measure, so an unmeasured bar
+# never grows. Every input is measured in cells, not hand-counted: left block,
+# this job's own output, per-window chip chrome (" #I ", optional " dot", the
+# active chip's two title margins), the @sl_gap_pad the format opens each chip
+# with, the lock chip when the leader is locked, and the format spaces.
+_sb_room() {
+  local lw rows idx bell act lock=0 n=0 chrome=0 vis
   [[ $sb_client_w =~ ^[0-9]+$ ]] || return 0 # no client -> keep the shipped field
   # the left block as tmux renders it, in cells (see _sb_out_w)
   lw=$(_sb_out_w "$(tmux display -t "$sb_session" -p '#{E:status-left}' 2>/dev/null)")
@@ -117,7 +113,7 @@ _sb_sl_tw() {
     chrome=$((chrome + 1))                    # @sl_gap_pad: the format opens each chip with one
     ((n >= sb_tab_budget)) && break           # past the budget, tmux owns the cut
   done <<<"$rows"
-  ((n)) || return 0
+  ((n)) || return 1 # no windows to measure -> say so, like the no-client path
   # the session chip's #() job is not part of the format's width term, so the
   # lock glyph's cells are asked from autolock.sh, the single owner of lock state
   # (the same door lockchip.sh uses): without them the list is 3 cells too wide
@@ -131,8 +127,22 @@ _sb_sl_tw() {
   # wide and tmux marks the first chip. Measured on the shipped config: a 200-cell
   # client with a wide title keeps 1-3 chips flush and marks at 4; the same holds
   # at 120 cells.
-  avail=$((sb_client_w - lw - vis - lock - 3))
-  field=$((avail - chrome))
+  echo "$((sb_client_w - lw - vis - lock - 3 - chrome))"
+}
+
+# _sb_sl_tw — publish @sl_tw, the active chip's title field (cells) for the next
+# draw, from _sb_room's measurement. The field is budgeted for the first
+# @sl_tab_budget chips, never for the live count: the chip past that budget makes
+# the list wider than the space, so tmux trims the tail chips and draws its < >
+# markers (04-statusbar.conf owns those marker screens), and the active chip
+# survives the trim because it carries list=focus. @sl_title_floor keeps that
+# active title readable instead of letting the field collapse; a title shorter
+# than the field keeps its own width, so more chips stay visible and nothing is
+# marked. 0 means "no room for a title": the conf's guard then drops the whole
+# title group.
+_sb_sl_tw() {
+  local field
+  field=$(_sb_room "$1") || return 0 # no client -> keep the shipped field
   if ((field >= 4)); then
     # keep the accent readable: the list overflows instead, and tmux marks it
     ((field < sb_title_floor)) && field=$sb_title_floor
@@ -196,7 +206,7 @@ _sb_stamp() {
   clock=$(date +"$(_sb_clock_fmt "$clock_fmt")")
 }
 
-# _sb_pull -> the slow part: fills gpu/vram/cpu/ram/batt.
+# _sb_pull -> the slow part: fills gpu/vram/cpu/ram/swap/batt.
 _sb_pull() {
   gpu_read
   if [[ $(uname -s) == Darwin ]]; then
@@ -210,20 +220,34 @@ _sb_pull() {
     read -r _ u n s i w _ </proc/stat
     total2=$((u + n + s + i + w)) idle2=$((i + w))
     cpu_delta "$total" "$idle" "$total2" "$idle2"
-    read -r mt ma < <(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{print t, a}' /proc/meminfo)
+    read -r mt ma st sf < <(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^SwapTotal:/{s=$2} /^SwapFree:/{f=$2} END{print t, a, s, f}' /proc/meminfo)
     ram_pct "$mt" "$ma"
+    swap_pct "$st" "$sf"
     batt_linux || true
   fi
 }
 
 # _sb_write TS METRICS -> atomic state update (the renderer never sees a partial file).
+# mktemp, not $$: the forked fetch inherits the parent's $$, so both writers would
+# otherwise share one temp file and interleave into it before the rename.
 _sb_write() {
-  printf '%s\n%s\n' "$1" "$2" >"$_sb_state.$$" && mv "$_sb_state.$$" "$_sb_state"
+  local tmp
+  tmp=$(mktemp "$_sb_state.XXXXXX") || return 1
+  printf '%s\n%s\n' "$1" "$2" >"$tmp" && mv "$tmp" "$_sb_state"
 }
 
 # _sb_fetch TS -> slow path, runs detached: pull, publish metrics, ask for a redraw.
+# Swap rides only while the line it would grow into still leaves the window-list
+# chrome room, so that candidate is measured before the segment is composed in;
+# measuring the published @sl_tw instead would let a pull grow for the width of an
+# earlier draw (a resize from wide to narrow) and flicker the segment on and off.
 _sb_fetch() {
   _sb_pull
+  sb_room=1 # force the segment into the candidate
+  # @sb_out is one server-wide scratch option: measure only while holding the lock,
+  # or a draw running at the same moment reads this job's text as its own.
+  sb_room=$( _sb_lock; _sb_room "$(compose_metrics)$(_sb_time 1 "$date_str" "$clock")" )
+  [[ $sb_room =~ ^-?[0-9]+$ ]] || sb_room=
   _sb_write "$1" "$(compose_metrics)"
   tmux refresh-client -S
 }
@@ -236,6 +260,7 @@ _sb_read_state
 # needs the palette too, and a palette read only in the renderer leaves the cached
 # line with empty #[bg=] terms, which tmux paints in the bar's own colour.
 _sb_opts
+_sb_stamp # the fetch measures the candidate right block, whose time term costs cells
 ready=0
 [[ -f $_sb_state ]] && ready=1
 if ((now - SB_LAST >= $(_sb_interval))); then
@@ -243,7 +268,6 @@ if ((now - SB_LAST >= $(_sb_interval))); then
   # stdio + lock fd closed so tmux sees this job exit now, not when the fetch ends
   _sb_fetch "$now" </dev/null >/dev/null 9>&- &
 fi
-_sb_stamp
 out=$(printf '%s%s' "$SB_CACHE" "$(_sb_time "$ready" "$date_str" "$clock")")
 _sb_cmd          # command text for the next draw
 _sb_sl_tw "$out" # active-chip field for the next draw

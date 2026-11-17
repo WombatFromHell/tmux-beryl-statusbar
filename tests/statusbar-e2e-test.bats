@@ -37,6 +37,11 @@ obs_row() { tmux capture-pane -p -t obs | head -1; }
 obs_esc() { tmux capture-pane -e -p -t obs | head -1; }
 row_has_metrics() { [[ "$(obs_row)" == *'%'* ]]; }
 row_nonempty() { [[ -n "$(obs_row)" ]]; }
+# A draw the budget fits: something on the row and no cut markers. The metric line
+# is composed by the detached pull, so right after a resize the bar can briefly
+# carry a block sized for the old client; the narrow-client claims are about the
+# steady state, not that transient frame.
+row_fits() { local row; row="$(obs_row)"; [[ -n $row && $row != *'<'* && $row != *'>'* ]]; }
 # Decorated ready-state draw: metric blocks (%) and calendar (MM.DD) present
 # in the right-aligned block (assert on the suffix so pane-title dots
 # can't interfere).
@@ -422,9 +427,9 @@ sgr_fg() {
   for w in 60 40; do
     tmux resize-window -t obs -x "$w" -y 20
     tmux refresh-client -S
-    # row_ready reads the last 40 columns, which a narrow client clips, so the
-    # wait here is only that the client drew something.
-    wait_until 15 row_nonempty
+    # row_ready reads the last 40 columns, which a narrow client clips, so this
+    # waits for the bar to settle into a row the new width fits.
+    wait_until 15 row_fits
     row="$(stable_row)"
     [[ $row != *'<'* && $row != *'>'* ]]                        # nothing clipped
     [[ $(row_width) -le $(tmux display -p '#{client_width}') ]] # never overflows
@@ -437,4 +442,16 @@ sgr_fg() {
       done
     fi
   done
+}
+
+# Nothing to measure: the session the bar was drawn in is gone, so the script leaves
+# the shipped @sl_tw alone instead of publishing 0, which the conf reads as "no room
+# for a title".
+@test "E2E: a draw for a session that is gone keeps the shipped title field" {
+  real_bar
+  attach_observer
+  wait_until 15 row_ready
+  tmux set -g @sl_tw 32
+  TMUX="$SOCK" bash "$HOME/.config/tmux/scripts/statusbar.sh" nosuchsession 200 >/dev/null
+  [[ $(tmux show-options -gv @sl_tw) == 32 ]]
 }

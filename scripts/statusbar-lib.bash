@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # statusbar-lib.bash — pure parse/compute layer for the tmux status bar.
 # No tmux, no loop, no sleep, no /proc I/O: every function takes its input
-# (a tool's raw output or a proc snapshot) and fills the gpu/vram/cpu/ram
+# (a tool's raw output or a proc snapshot) and fills the gpu/vram/cpu/ram/swap
 # globals. Sourced by statusbar.sh (the consumer) and by the bats suite
 # (the unit tier), so the same logic is tested with fixtures and in the
 # one-shot `#()` job.
@@ -131,6 +131,15 @@ cpu_delta() {
 # ram_pct MT MA -> sets ram (percent of memory in use).
 ram_pct() {
   ram=$((($1 - $2) * 100 / $1))
+  return 0
+}
+
+# swap_pct ST SF -> sets swap (percent of the swap partition in use). Empty
+# when there is no swap at all (ST 0) or the numbers are unreadable, so the
+# chip hides it rather than showing a phantom 0%.
+swap_pct() {
+  swap=
+  [[ $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] && (( $1 > 0 )) && swap=$((($1 - $2) * 100 / $1))
   return 0
 }
 
@@ -268,13 +277,16 @@ _sb_clock_fmt() {
   fi
 }
 
-# _sb_chip ICON VAL [VAL2] -> "icon VAL%|VAL2%" block; nothing when VAL is empty.
+# _sb_chip ICON VAL [VAL...] -> "icon VAL%|VAL2%|…" block; nothing when VAL is empty.
 _sb_chip() {
-  [[ -n $2 ]] || return 0
-  printf '#[bg=%s] #[fg=%s]%s#[fg=%s] %s%%' "$_sb_s0" "$_sb_t1" "$1" "$_sb_o2" "$2"
-  if [[ -n ${3:-} ]]; then
-    printf '#[fg=%s]|#[fg=%s]%s%%' "$_sb_m" "$_sb_o2" "$3"
-  fi
+  local icon=$1 v
+  shift
+  [[ -n ${1:-} ]] || return 0
+  printf '#[bg=%s] #[fg=%s]%s#[fg=%s] %s%%' "$_sb_s0" "$_sb_t1" "$icon" "$_sb_o2" "$1"
+  shift
+  for v in "$@"; do
+    [[ -n $v ]] && printf '#[fg=%s]|#[fg=%s]%s%%' "$_sb_m" "$_sb_o2" "$v"
+  done
   printf ' #[default] '
 }
 
@@ -316,8 +328,16 @@ _sb_strip() {
 }
 
 # compose_metrics — gpu/cpu/battery blocks; hidden ones emit nothing.
+# Swap rides on the CPU chip and only shows above 5%: a nearly-empty swap
+# partition is noise, not a signal, and it rides only when sb_room is a measured
+# non-negative number: the cells the bar has left for the window-list chrome once
+# the segment is drawn (statusbar.sh's _sb_room), so a narrow client keeps its
+# chips and an unmeasured bar never grows. It is Linux-only (`/proc/meminfo`), so
+# on macOS swap stays empty and the chip falls back to CPU|MEM.
 compose_metrics() {
+  local swap_shown=
+  [[ ${swap:-} =~ ^[0-9]+$ ]] && (( swap > 5 )) && [[ ${sb_room:-} =~ ^[0-9]+$ ]] && swap_shown=$swap
   _sb_chip "$(_icon gpu)" "$gpu" "$vram"
-  _sb_chip "$(_icon cpu)" "$cpu" "$ram"
+  _sb_chip "$(_icon cpu)" "$cpu" "$ram" "$swap_shown"
   _sb_batt
 }

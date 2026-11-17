@@ -15,12 +15,12 @@ name over line number, so this stays true as the files move.
 | `conf.d/04-statusbar.conf` | palette, `@sl_*` blocks, `status-left`, `status-format[0]`, `status-right` |
 | `conf.d/05-floax.conf` | the floax popup session and its tab-bar hooks |
 | `scripts/statusbar.sh` | the `status-right` job: pacing, pull, compose, publish the width budget |
-| `scripts/statusbar-lib.bash` | pure parse/compute: GPU providers, CPU/RAM math, parsers, block composer |
+| `scripts/statusbar-lib.bash` | pure parse/compute: GPU providers, CPU/RAM/swap math, parsers, block composer |
 | `scripts/autolock.sh` | the lock state: daemon, poll, F12 toggle, `lock`/`unlock` |
 | `scripts/autolock-lib.bash` | pure decision layer: `matches_locked` / `auto_desired` / `decide` |
 | `scripts/lockchip.sh` | `status-left` job: emits the lock glyph when locked |
 | `scripts/bell.sh` | the per-window `@bell` flag and the sound |
-| `scripts/_env.bash` | the PATH tail every `#()` child shares (sourced by the three jobs) |
+| `scripts/_env.bash` | the PATH tail every `#()` child shares (sourced by every tmux-spawned script) |
 | `helpers/capture-bar.sh` | the eyeball harness: one bar row per client width, not a gate |
 | `tests/` | bats suite — the gate (see Testing) |
 
@@ -86,11 +86,13 @@ which is back-to-back, so the script enforces "no pull faster than
 Composition is split so it is testable without tmux:
 
 - `statusbar-lib.bash` is tmux-free — every function takes its input (a tool's
-  raw output or a `/proc` snapshot) and fills the gpu/vram/cpu/ram globals.
+  raw output or a `/proc` snapshot) and fills the gpu/vram/cpu/ram/swap globals.
   GPU provider precedence NVIDIA → AMD → Intel dGPU → Intel iGPU; a provider
-  that reports nothing returns 1 and the bar hides that block. CPU/RAM are pure
-  math (`cpu_delta`, `ram_pct`); the Darwin path feeds `cpu_darwin`/`ram_darwin`
-  the raw `top -l 2` and `vm_stat` output (`ram_darwin` also takes `hw.memsize`).
+  that reports nothing returns 1 and the bar hides that block. CPU/RAM/SWAP are
+  pure math (`cpu_delta`, `ram_pct`, `swap_pct`); swap is Linux-only (the
+  `/proc/meminfo` `SwapTotal`/`SwapFree` pair read by `_sb_pull`), so macOS keeps
+  the plain CPU|MEM chip. The Darwin path feeds `cpu_darwin`/`ram_darwin` the raw
+  `top -l 2` and `vm_stat` output (`ram_darwin` also takes `hw.memsize`).
   Battery: `batt_linux`/`batt_darwin` read the percentage and state, `_batt_is_ac`
   decides the charging icon, `_batt_icon` picks a tiered level glyph otherwise.
   Drivers that report `Unknown` while plugged in are settled by `_ac_online`, which
@@ -98,7 +100,13 @@ Composition is split so it is testable without tmux:
 - `_tout` wraps every GPU probe in `timeout` (`gtimeout` on macOS, run bare when
   neither exists), so a hung vendor tool cannot stall a draw.
 - `compose_metrics` emits one chip per metric (`_sb_chip`, plus `_sb_batt` for the
-  battery), hidden blocks emit zero characters, so gaps never double up.
+  battery), hidden blocks emit zero characters, so gaps never double up. Swap rides
+  on the CPU chip as a third segment (`CPU%|MEM%|SWAP%`), hidden at or below 5% so
+  a nearly-empty swap partition is not drawn as noise, and hidden when `sb_room`
+  is not a measured non-negative number — the cells `statusbar.sh`'s `_sb_room`
+  leaves for the window-list chrome once the segment is drawn. The fetch measures
+  that candidate before composing, so a resize from wide to narrow cannot keep a
+  segment sized for the old client, and a bar with no client attached never grows.
 - The palette has one owner: `04-statusbar.conf` sets `@c_*`, `statusbar.sh`
   reads them in a single `tmux display` call (`_sb_opts`), the library takes
   them as inputs. Same for `@clock-format` (`_sb_clock_fmt` maps 12/24). The palette
@@ -149,9 +157,11 @@ unset reverts to tmux's compiled-in default (`C-b`), not the conf's `C-s`.
   → `lock`/`unlock`/`noop`, with the manual override taking priority over
   `auto_desired`. `matches_locked` is a full-string match, so `sshd` does not
   match `ssh`.
-- The daemon: `autolock.sh start` polls every `INTERVAL_MS` (1s); the pidfile
-  makes it idempotent across config reloads and server restarts, and a stale
-  pidfile self-heals when its process is gone. `03-keys.conf` starts it at load.
+- The daemon: `autolock.sh start` polls every `INTERVAL_MS` (1s); an `flock` it holds
+  makes it idempotent across config reloads and server restarts, and the lock dies
+  with the daemon, so a killed one can never leave a pid a later start mistakes for
+  a live process. Stock macOS has no `flock`, so the pidfile is the door there.
+  `03-keys.conf` starts it at load.
 - `F12` (`toggle`) flips the state and arms `@autolock_override` (`lock`|`unlock`),
   which the poll honors while a locked proc is foreground; the override is
   cleared once the auto state agrees with it, so a fresh matched proc re-asserts
@@ -256,7 +266,8 @@ it is a helper, not a gate, and nothing in `tests/` runs it.
   client wins the field, others show tmux's `< >` markers.
 - `#{w:}` counts the private-use Nerd Font glyphs as one cell each (tmux 3.8);
   `_sb_out_w` measures with it unchanged.
-- `flock` is absent on stock macOS, so `statusbar.sh` may rarely do double work.
+- `flock` is absent on stock macOS: `statusbar.sh` may rarely do double work, and
+  `autolock.sh` falls back to its pidfile for daemon idempotence.
 - The Darwin parsers and the Intel iGPU provider are live code (the owner runs
   macOS on an Intel iGPU) — they are not dead code to delete.
 

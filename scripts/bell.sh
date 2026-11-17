@@ -10,6 +10,11 @@
 # acknowledging (selecting the window, or the terminal regaining focus)
 # clears it. Repeated bells within the same period can't re-arm it because
 # it is already 1.
+# The PATH bootstrap every tmux-spawned script shares (_env.bash): hook children can
+# get a minimal PATH, and tmux/paplay have to resolve there.
+# shellcheck disable=SC1091
+. "${0%/*}/_env.bash"
+
 case ${1:-} in
 clear)
   for w in $(tmux list-windows -F '#{window_id}'); do

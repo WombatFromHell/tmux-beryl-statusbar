@@ -4,7 +4,7 @@
 # override (toggle) that arms a directional override the poll honors.
 #
 # A small background daemon: `start` runs a poll loop at INTERVAL_MS; the
-# pidfile makes it idempotent across config reloads / server restarts. A
+# A small background daemon: `start` runs a poll loop at INTERVAL_MS; an flock
 # flock-based mutex serializes poll (daemon) and toggle (F12) so their
 # read-modify-write of the lock state is atomic.
 #
@@ -101,8 +101,14 @@ _poll_locked() {
 
 # --- the daemon loop --------------------------------------------------------
 _start() {
+  # An flock held by the daemon makes it idempotent across reloads and restarts, and
+  # dies with the daemon, so a killed one can never leave a pid a later start
+  # mistakes for a live process. Stock macOS has no flock: the pidfile is used there.
   local pidfile="${TMUX_TMPDIR:-/tmp}/tmux-autolock.pid"
-  if [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+  if command -v flock >/dev/null; then
+    exec 8>"${pidfile}.lock"
+    flock -n 8 || return 0 # another daemon holds it
+  elif [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
     return 0 # already running
   fi
   printf '%s\n' "$$" >"$pidfile"
